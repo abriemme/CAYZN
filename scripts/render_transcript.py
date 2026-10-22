@@ -8,6 +8,7 @@ chaque appel d'outil et chaque résultat (tronqué) apparaissent dans l'ordre.
 Les entrées purement techniques (snapshots, attachements système, hooks)
 sont omises car elles ne portent aucun échange.
 """
+
 import json
 import sys
 from datetime import datetime
@@ -36,7 +37,7 @@ def fmt_time(ts):
     if not ts:
         return ""
     try:
-        return datetime.fromisoformat(ts.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M:%S UTC")
+        return datetime.fromisoformat(ts).strftime("%Y-%m-%d %H:%M:%S UTC")
     except ValueError:
         return ts
 
@@ -130,7 +131,9 @@ def render(path):
                 att = entry.get("attachment") or {}
                 if att.get("type") == "hook_non_blocking_error":
                     err = (att.get("stderr") or "").strip()
-                    out.append(f"⚠️ Hook `{att.get('hookName', '?')}` en erreur (exit {att.get('exitCode')}) :\n")
+                    out.append(
+                        f"⚠️ Hook `{att.get('hookName', '?')}` en erreur (exit {att.get('exitCode')}) :\n"
+                    )
                     out.append(fence(truncate(err, max_lines=5, max_chars=400)) + "\n")
                 continue
 
@@ -153,11 +156,17 @@ def render(path):
                         btype = block.get("type")
                         if btype == "text":
                             user_turn += 1
-                            out.append(f"\n---\n\n## 👤 Utilisateur — tour {user_turn}{side}\n")
+                            out.append(
+                                f"\n---\n\n## 👤 Utilisateur — tour {user_turn}{side}\n"
+                            )
                             out.append(f"*{ts}*\n")
                             out.append(block.get("text", "").strip() + "\n")
                         elif btype == "tool_result":
-                            label = "❌ Résultat (erreur)" if block.get("is_error") else "↩️ Résultat"
+                            label = (
+                                "❌ Résultat (erreur)"
+                                if block.get("is_error")
+                                else "↩️ Résultat"
+                            )
                             out.append(f"{label}{side}:\n")
                             out.append(fence(truncate(tool_result_text(block))) + "\n")
                 continue
@@ -178,7 +187,14 @@ def render(path):
                     thought = (block.get("thinking") or "").strip()
                     if thought:
                         out.append("💭 *Réflexion :*\n")
-                        out.append(fence(truncate(thought, max_lines=12, max_chars=THINKING_MAX_CHARS)) + "\n")
+                        out.append(
+                            fence(
+                                truncate(
+                                    thought, max_lines=12, max_chars=THINKING_MAX_CHARS
+                                )
+                            )
+                            + "\n"
+                        )
                 elif btype == "tool_use":
                     out.append(tool_use_line(block) + side + "\n")
 
