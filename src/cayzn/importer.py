@@ -1,9 +1,9 @@
-"""Import nocturne du plan de transport depuis les CSV du système de réservation.
+"""Nightly import of the transport plan from the reservation system's CSV files.
 
-Usage : python -m cayzn.importer <dossier>  (trains.csv, stops.csv, ods.csv, prices.csv)
+Usage: python -m cayzn.importer <directory>  (trains.csv, stops.csv, ods.csv, prices.csv)
 
-L'import est idempotent : relancé sur les mêmes fichiers, il ne change rien.
-Tout est fait dans une seule transaction : une ligne invalide annule l'import entier.
+The import is idempotent: re-running it on the same files changes nothing.
+Everything runs in a single transaction: one invalid row aborts the whole import.
 """
 
 import csv
@@ -13,11 +13,14 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
+from redis import Redis
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from cayzn import od_cache
 from cayzn.db import SessionLocal
 from cayzn.models import OriginDestination, Service, ServiceStop, Stop
+from cayzn.settings import settings
 
 ServiceKey = tuple[str, date]
 
@@ -27,18 +30,16 @@ class TransportPlanError(ValueError):
 
 
 def _rows(path: Path, columns: set[str]) -> Iterator[tuple[str, dict[str, str]]]:
-    """Lignes du CSV avec leur emplacement `fichier:ligne` pour les messages d'erreur."""
+    """CSV rows with their `file:line` location, for error messages."""
     with path.open(newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         missing = columns - set(reader.fieldnames or [])
         if missing:
-            raise TransportPlanError(
-                f"{path.name}: colonnes manquantes {sorted(missing)}"
-            )
+            raise TransportPlanError(f"{path.name}: missing columns {sorted(missing)}")
         for row in reader:
             where = f"{path.name}:{reader.line_num}"
             if any(not (row[c] or "").strip() for c in columns):
-                raise TransportPlanError(f"{where}: valeur vide")
+                raise TransportPlanError(f"{where}: empty value")
             yield where, {c: row[c].strip() for c in columns}
 
 
@@ -47,7 +48,7 @@ def _service_key(where: str, row: dict[str, str]) -> ServiceKey:
         return row["name"], date.fromisoformat(row["departure_date"])
     except ValueError:
         raise TransportPlanError(
-            f"{where}: date invalide {row['departure_date']!r}"
+            f"{where}: invalid date {row['departure_date']!r}"
         ) from None
 
 
@@ -57,7 +58,7 @@ def import_transport_plan(session: Session, directory: Path) -> None:
         for where, row in _rows(directory / "trains.csv", {"departure_date", "name"})
     ]
 
-    # Précharge l'existant pour éviter une requête par ligne.
+    # Preload existing services to avoid one query per row.
     existing = session.scalars(
         select(Service)
         .where(Service.departure_date.in_({d for _, d in keys}))
@@ -86,11 +87,11 @@ def import_transport_plan(session: Session, directory: Path) -> None:
         key = _service_key(where, row)
         if key not in services:
             raise TransportPlanError(
-                f"{where}: service {key[0]} du {key[1]} absent de trains.csv"
+                f"{where}: service {key[0]} on {key[1]} is missing from trains.csv"
             )
         return services[key]
 
-    # Itinéraires : l'ordre des lignes de stops.csv donne l'ordre de desserte.
+    # Itineraries: the row order in stops.csv is the order the stops are served.
     itineraries: dict[ServiceKey, list[str]] = {}
     for where, row in _rows(
         directory / "stops.csv", {"departure_date", "name", "stops"}
@@ -98,7 +99,7 @@ def import_transport_plan(session: Session, directory: Path) -> None:
         codes = itineraries.setdefault(_service_key(where, row), [])
         service(where, row)
         if row["stops"] in codes:
-            raise TransportPlanError(f"{where}: arrêt {row['stops']} en double")
+            raise TransportPlanError(f"{where}: duplicate stop {row['stops']}")
         codes.append(row["stops"])
 
     for key, codes in itineraries.items():
@@ -106,7 +107,7 @@ def import_transport_plan(session: Session, directory: Path) -> None:
         if [s.stop.code for s in svc.stops] == codes:
             continue
         svc.stops.clear()
-        session.flush()  # supprime l'ancien itinéraire avant de réinsérer les mêmes clés
+        session.flush()  # delete the old itinerary before reinserting the same keys
         svc.stops.extend(
             ServiceStop(position=i, stop=stop(c)) for i, c in enumerate(codes)
         )
@@ -132,11 +133,11 @@ def import_transport_plan(session: Session, directory: Path) -> None:
         o, d = row["origin"], row["destination"]
         if o not in positions or d not in positions:
             raise TransportPlanError(
-                f"{where}: {o}-{d} n'est pas desservi par le service {svc.name}"
+                f"{where}: {o}-{d} is not served by service {svc.name}"
             )
         if positions[o] >= positions[d]:
             raise TransportPlanError(
-                f"{where}: {o} n'est pas avant {d} dans l'itinéraire"
+                f"{where}: {o} does not come before {d} in the itinerary"
             )
         od = OriginDestination(origin=stop(o), destination=stop(d))
         svc.ods.append(od)
@@ -149,21 +150,29 @@ def import_transport_plan(session: Session, directory: Path) -> None:
         _, od = find_od(where, row)
         if od is None:
             raise TransportPlanError(
-                f"{where}: OD {row['origin']}-{row['destination']} absente de ods.csv"
+                f"{where}: OD {row['origin']}-{row['destination']} is missing from ods.csv"
             )
         try:
             price = Decimal(row["price"])
         except InvalidOperation:
             raise TransportPlanError(
-                f"{where}: prix invalide {row['price']!r}"
+                f"{where}: invalid price {row['price']!r}"
             ) from None
-        if not price.is_finite() or price < 0:
-            raise TransportPlanError(f"{where}: prix invalide {row['price']!r}")
+        # Numeric(10, 2): at most 8 digits before the decimal point and 2 after.
+        if (
+            not price.is_finite()
+            or not 0 <= price < 10**8
+            or price != price.quantize(Decimal("0.01"))
+        ):
+            raise TransportPlanError(f"{where}: invalid price {row['price']!r}")
         od.price = price
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        sys.exit("usage: python -m cayzn.importer <dossier>")
+        sys.exit("usage: python -m cayzn.importer <directory>")
     with SessionLocal.begin() as session:
         import_transport_plan(session, Path(sys.argv[1]))
+    # After the commit: the API resolves bookings against the new plan.
+    with SessionLocal() as session, Redis.from_url(str(settings.redis_url)) as redis:
+        print(f"{od_cache.reload(session, redis)} ODs loaded into the cache")

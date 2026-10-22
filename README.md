@@ -1,19 +1,22 @@
 # CAYZN
-## Démarrer
+## Getting started
 
 ```bash
 uv sync
 uv run fastapi dev src/cayzn/main.py   # http://127.0.0.1:8000/docs
 just check                             # lint, format, types (ty)
-just test
+just test                              # requires Postgres and Redis (throwaway cayzn_test_* databases)
 just migrate                           # alembic upgrade head
-just import-plan files                 # importe trains/stops/ods/prices.csv
+just migrate-check                     # alembic check: migrations up to date with the models
+just import-plan files                 # import trains/stops/ods/prices.csv, reload the Redis cache
 ```
 
-Nouvelle migration après modification de `src/cayzn/models.py` :
-`uv run alembic revision --autogenerate -m "..."`, puis relire le fichier généré.
+New migration after changing `src/cayzn/models.py`:
+`uv run alembic revision --autogenerate -m "..."`, then review the generated file.
 
-`DATABASE_URL` (URL Postgres, défaut : `postgresql+psycopg://cayzn:cayzn@localhost:5432/cayzn`, lu depuis l'env, `.env` puis `.env.local`) choisit la base. `cp .env.example .env.local` pour démarrer.
+`DATABASE_URL` (Postgres URL, default: `postgresql+psycopg://cayzn:cayzn@localhost:5432/cayzn`, read from the environment, then `.env`, then `.env.local`) selects the database. Run `cp .env.example .env.local` to get started.
 
-Postgres local : `docker compose up -d`, puis
-`DATABASE_URL=postgresql+psycopg://cayzn:cayzn@localhost:5432/cayzn`.
+`REDIS_URL` (default: `redis://localhost:6379/0`): cache `(service, date, origin, destination) → (service_id, od_id)`
+used by `POST /bookings`. Loaded on API startup if missing, reloaded after each import.
+
+Local Postgres and Redis: `docker compose up -d`.

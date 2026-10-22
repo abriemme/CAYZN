@@ -1,9 +1,9 @@
-"""Plan de transport en base : services, arrêts desservis, OD et prix courants.
+"""Transport plan (services, stops, ODs, current prices) and bookings.
 
-Ces modèles ORM sont volontairement distincts des schémas Pydantic de l'API.
+These ORM models are deliberately separate from the API's Pydantic schemas.
 """
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -19,7 +19,7 @@ from cayzn.db import Base
 
 
 class Stop(Base):
-    """Lieu desservi, identifié par son code (ex. `ply` pour Paris Gare de Lyon)."""
+    """Served location, identified by its code (e.g. `ply` for Paris Gare de Lyon)."""
 
     __tablename__ = "stops"
 
@@ -28,7 +28,7 @@ class Stop(Base):
 
 
 class Service(Base):
-    """Opération de transport (train, bus, vol), unique par nom et date de départ."""
+    """Transport operation (train, bus, flight), unique by name and departure date."""
 
     __tablename__ = "services"
     __table_args__ = (UniqueConstraint("name", "departure_date"),)
@@ -48,7 +48,7 @@ class Service(Base):
 
 
 class ServiceStop(Base):
-    """Arrêt d'un service, à sa position dans l'itinéraire (0 = origine)."""
+    """Stop of a service, at its position in the itinerary (0 = origin)."""
 
     __tablename__ = "service_stops"
     __table_args__ = (UniqueConstraint("service_id", "stop_id"),)
@@ -64,7 +64,7 @@ class ServiceStop(Base):
 
 
 class OriginDestination(Base):
-    """Trajet réservable entre deux arrêts d'un service, avec son prix courant."""
+    """Bookable trip between two stops of a service, with its current price."""
 
     __tablename__ = "ods"
     __table_args__ = (
@@ -84,3 +84,35 @@ class OriginDestination(Base):
     service: Mapped[Service] = relationship(back_populates="ods")
     origin: Mapped[Stop] = relationship(foreign_keys=[origin_id])
     destination: Mapped[Stop] = relationship(foreign_keys=[destination_id])
+
+
+class Booking(Base):
+    """Booking received by webhook, linked to its OD in the transport plan.
+
+    The raw payload fields are kept as received alongside the resolved links.
+    """
+
+    __tablename__ = "bookings"
+    __table_args__ = (
+        CheckConstraint("origin <> destination", name="distinct_stops"),
+        CheckConstraint("price >= 0", name="price_positive"),
+        CheckConstraint(
+            "cancel_datetime IS NULL OR cancel_datetime >= sale_datetime",
+            name="cancel_after_sale",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    service_name: Mapped[str] = mapped_column(String(64))
+    departure_date: Mapped[date]
+    origin: Mapped[str] = mapped_column(String(16))
+    destination: Mapped[str] = mapped_column(String(16))
+    price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    currency: Mapped[str] = mapped_column(String(3))
+    sale_datetime: Mapped[datetime]
+    cancel_datetime: Mapped[datetime | None]
+    service_id: Mapped[int] = mapped_column(ForeignKey("services.id"), index=True)
+    od_id: Mapped[int] = mapped_column(ForeignKey("ods.id"), index=True)
+
+    service: Mapped[Service] = relationship()
+    od: Mapped[OriginDestination] = relationship()

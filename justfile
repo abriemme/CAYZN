@@ -22,17 +22,20 @@ check:
 
 # Tests
 test:
-    ENV=test uv run pytest -x -n auto
+    uv run pytest -x -n auto
 
-# Applique les migrations Alembic
+# Apply Alembic migrations
 migrate:
     uv run alembic upgrade head
 
-# Importe le plan de transport (trains, stops, ods, prices .csv)
+# Check that migrations cover the models (requires Postgres)
+migrate-check:
+    uv run alembic check
+
+# Import the transport plan (trains, stops, ods, prices .csv) and reload the cache
 import-plan dir="files":
     uv run python -m cayzn.importer {{dir}}
 
-
 # Setup pre-commit hooks
 pre-commit-install:
-    uv pip install pre-commit && uv run pre-commit install
+    uv run pre-commit install

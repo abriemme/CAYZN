@@ -3,8 +3,9 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from cayzn import models  # noqa: F401  (enregistre les tables)
-from cayzn.db import Base, settings
+from cayzn import models  # noqa: F401  (registers the tables)
+from cayzn.db import Base
+from cayzn.settings import settings
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -15,7 +16,7 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# % échappé : la config Alembic interpole les valeurs (mots de passe encodés).
+# Escape %: Alembic config interpolates values (URL-encoded passwords).
 config.set_main_option("sqlalchemy.url", str(settings.database_url).replace("%", "%%"))
 target_metadata = Base.metadata
 
@@ -67,7 +68,7 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            render_as_batch=True,  # ALTER TABLE sous SQLite
+            render_as_batch=True,  # ALTER TABLE on SQLite
         )
 
         with context.begin_transaction():

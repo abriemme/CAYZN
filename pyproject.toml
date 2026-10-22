@@ -6,13 +6,15 @@ readme = "README.md"
 authors = [
     { name = "Abry Maxime", email = "github@abmx.fr" }
 ]
-requires-python = ">=3.15"
+requires-python = ">=3.14"
 dependencies = [
     "alembic>=1.20.1",
+    "fastapi-redis-sdk>=0.9.1",
     "fastapi[standard]>=0.159.1",
     "psycopg[binary]>=3.3.6",
     "pydantic-settings>=2.16.1",
-    "sqlalchemy>=2.1.6",
+    "redis>=8.1.0",
+    "sqlalchemy[asyncio]>=2.1.6",
 ]
 
 [build-system]
@@ -34,7 +36,7 @@ script_location = "%(here)s/migrations"
 prepend_sys_path = ["."]
 file_template = "%%(year)d_%%(month).2d_%%(day).2d_%%(hour).2d%%(minute).2d-%%(rev)s_%%(slug)s"
 
-# Les migrations générées doivent passer pre-commit telles quelles.
+# Generated migrations must pass pre-commit as is.
 [[tool.alembic.post_write_hooks]]
 name = "ruff_fix"
 type = "module"

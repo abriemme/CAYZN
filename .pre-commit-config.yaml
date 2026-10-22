@@ -1,4 +1,4 @@
-# Les transcripts sont archivés bruts : aucun hook ne doit les modifier.
+# Transcripts are archived raw: no hook may modify them.
 exclude: ^transcripts/
 
 repos:

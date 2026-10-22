@@ -1,28 +1,20 @@
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 
-from pydantic import PostgresDsn
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import MetaData, create_engine
-from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
+from cayzn.settings import settings
 
-class Settings(BaseSettings):
-    # Le dernier fichier l'emporte : .env.local surcharge .env.
-    model_config = SettingsConfigDict(env_file=(".env", ".env.local"))
-
-    database_url: PostgresDsn = PostgresDsn(
-        "postgresql+psycopg://cayzn:cayzn@localhost:5432/cayzn"
-    )
-
-
-settings = Settings()
-
+# Sync for the importer (batch); async for the API. psycopg supports both.
 engine = create_engine(str(settings.database_url))
 SessionLocal = sessionmaker(bind=engine)
+async_engine = create_async_engine(str(settings.database_url))
+AsyncSessionLocal = async_sessionmaker(async_engine, expire_on_commit=False)
 
 
 class Base(DeclarativeBase):
-    # Noms de contraintes déterministes : Alembic peut les retrouver pour les modifier.
+    # Deterministic constraint names, so Alembic can find them to alter them.
     metadata = MetaData(
         naming_convention={
             "ix": "ix_%(column_0_label)s",
@@ -34,6 +26,6 @@ class Base(DeclarativeBase):
     )
 
 
-def get_db() -> Iterator[Session]:
-    with SessionLocal() as session:
+async def get_db() -> AsyncIterator[AsyncSession]:
+    async with AsyncSessionLocal() as session:
         yield session

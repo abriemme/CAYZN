@@ -3,22 +3,12 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
 
-from cayzn.db import Base
 from cayzn.importer import TransportPlanError, import_transport_plan
 from cayzn.models import OriginDestination, Service, ServiceStop, Stop
 
 FILES = Path(__file__).parents[1] / "files"
-
-
-@pytest.fixture
-def session():
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine)
-    with Session(engine) as session:
-        yield session
 
 
 @pytest.fixture
@@ -92,28 +82,42 @@ def test_reimport_updates_itinerary_and_price(session, plan):
 @pytest.mark.parametrize(
     ("file", "content", "error"),
     [
-        ("trains.csv", "departure_date,name\n14/11/2024,9410\n", "date invalide"),
-        ("trains.csv", "departure_date\n2024-11-14\n", "colonnes manquantes"),
-        ("stops.csv", "departure_date,name,stops\n2024-12-01,1,ply\n", "absent"),
+        ("trains.csv", "departure_date,name\n14/11/2024,9410\n", "invalid date"),
+        ("trains.csv", "departure_date\n2024-11-14\n", "missing columns"),
+        (
+            "stops.csv",
+            "departure_date,name,stops\n2024-12-01,1,ply\n",
+            "missing from trains",
+        ),
         (
             "ods.csv",
             "departure_date,name,origin,destination\n2024-11-14,9410,msc,ply\n",
-            "pas avant",
+            "does not come before",
         ),
         (
             "ods.csv",
             "departure_date,name,origin,destination\n2024-11-14,9410,ply,adj\n",
-            "pas desservi",
+            "not served",
         ),
         (
             "prices.csv",
             "departure_date,name,origin,destination,price\n2024-11-14,9410,ply,lpd,-1\n",
-            "prix invalide",
+            "invalid price",
+        ),
+        (
+            "prices.csv",
+            "departure_date,name,origin,destination,price\n2024-11-14,9410,ply,lpd,55.555\n",
+            "invalid price",
+        ),
+        (
+            "prices.csv",
+            "departure_date,name,origin,destination,price\n2024-11-14,9410,ply,lpd,1e8\n",
+            "invalid price",
         ),
         (
             "prices.csv",
             "departure_date,name,origin,destination,price\n2024-11-14,9410,ply,lpd,\n",
-            "valeur vide",
+            "empty value",
         ),
     ],
 )
