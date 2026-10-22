@@ -1,0 +1,18 @@
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: cayzn
+      POSTGRES_PASSWORD: cayzn
+      POSTGRES_DB: cayzn
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cayzn"]
+      interval: 5s
+      retries: 5
+
+volumes:
+  pgdata:
