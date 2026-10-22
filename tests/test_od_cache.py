@@ -35,8 +35,9 @@ def test_reload_maps_every_od(session, redis):
     assert found is not None
     od = session.get(OriginDestination, found[1])
     assert od is not None
-    assert (od.origin.code, od.destination.code) == ("lpd", "msc")
+    assert (od.origin.code, od.destination.code) == ("LPD", "MSC")
     assert session.get(Service, found[0]) is od.service
+    assert lookup(("9410", date(2024, 11, 14), "LPD", "MSC")) == found
     assert lookup(("9410", date(2024, 11, 14), "msc", "lpd")) is None
     assert lookup(("9410", date(2024, 11, 15), "lpd", "msc")) is None
 

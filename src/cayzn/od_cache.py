@@ -28,7 +28,15 @@ ODKey = tuple[str, date, str, str]
 def _field(key: ODKey) -> str:
     service_number, departure_date, origin, destination = key
     # JSON rather than a separator: no service name can make a field ambiguous.
-    return json.dumps([service_number, departure_date.isoformat(), origin, destination])
+    # Station codes are uppercased so a lookup never misses on case alone.
+    return json.dumps(
+        [
+            service_number,
+            departure_date.isoformat(),
+            origin.upper(),
+            destination.upper(),
+        ]
+    )
 
 
 def reload(session: Session, redis: Redis) -> int:

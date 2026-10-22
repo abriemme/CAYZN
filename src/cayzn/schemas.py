@@ -4,9 +4,17 @@ from datetime import date
 from decimal import Decimal
 from typing import Annotated, Self
 
-from pydantic import BaseModel, ConfigDict, Field, NaiveDatetime, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    NaiveDatetime,
+    StringConstraints,
+    model_validator,
+)
 
-Code = Annotated[str, Field(min_length=1, max_length=16)]
+# Station codes are stored in uppercase: normalise whatever case the sender uses.
+Code = Annotated[str, StringConstraints(min_length=1, max_length=16, to_upper=True)]
 
 
 class BookingIn(BaseModel):

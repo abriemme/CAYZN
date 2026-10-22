@@ -24,6 +24,9 @@ from cayzn.settings import settings
 
 ServiceKey = tuple[str, date]
 
+# Station codes are stored in uppercase, whatever the case in the CSV files.
+_STATION_COLUMNS = {"stops", "origin", "destination"}
+
 
 class TransportPlanError(ValueError):
     pass
@@ -40,7 +43,10 @@ def _rows(path: Path, columns: set[str]) -> Iterator[tuple[str, dict[str, str]]]
             where = f"{path.name}:{reader.line_num}"
             if any(not (row[c] or "").strip() for c in columns):
                 raise TransportPlanError(f"{where}: empty value")
-            yield where, {c: row[c].strip() for c in columns}
+            values = {c: row[c].strip() for c in columns}
+            for c in columns & _STATION_COLUMNS:
+                values[c] = values[c].upper()
+            yield where, values
 
 
 def _service_key(where: str, row: dict[str, str]) -> ServiceKey:

@@ -39,13 +39,13 @@ def test_booking_is_stored_and_linked(client, session, plan):
     assert booking is not None
     assert (booking.service_name, booking.origin, booking.destination) == (
         "9410",
-        "lpd",
-        "msc",
+        "LPD",
+        "MSC",
     )
     assert booking.price == Decimal(10)
     assert booking.sale_datetime == datetime(2024, 4, 28, 4, 55, 27)
     assert booking.cancel_datetime == datetime(2024, 4, 29, 10)
-    assert (booking.od.origin.code, booking.od.destination.code) == ("lpd", "msc")
+    assert (booking.od.origin.code, booking.od.destination.code) == ("LPD", "MSC")
     assert booking.service is booking.od.service
     assert booking.service.name == "9410"
     assert response.json() == {
@@ -53,6 +53,22 @@ def test_booking_is_stored_and_linked(client, session, plan):
         "service_id": booking.service_id,
         "od_id": booking.od_id,
     }
+
+
+@pytest.mark.parametrize(
+    ("origin", "destination"), [("lpd", "msc"), ("LPD", "MSC"), (" Lpd ", "mSc")]
+)
+def test_station_codes_are_case_insensitive(client, session, plan, origin, destination):
+    response = client.post(
+        "/bookings",
+        json=PAYLOAD
+        | {"origin_station_name": origin, "destination_station_name": destination},
+    )
+
+    assert response.status_code == 201
+    booking = session.get(Booking, response.json()["id"])
+    assert booking is not None
+    assert (booking.od.origin.code, booking.od.destination.code) == ("LPD", "MSC")
 
 
 @pytest.mark.parametrize(
@@ -91,6 +107,8 @@ def test_booking_is_rejected_until_cache_reload(client, session, redis):
         {"currency": "eur"},
         {"departure_date": "30/05/2024"},
         {"destination_station_name": "lpd"},
+        # Same station once uppercased.
+        {"destination_station_name": "LPD"},
         {"cancel_datetime": "2024-04-27T00:00:00"},
         {"sale_datetime": "2024-04-28T04:55:27+02:00"},
         {"service_number": ""},

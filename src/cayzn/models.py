@@ -19,9 +19,13 @@ from cayzn.db import Base
 
 
 class Stop(Base):
-    """Served location, identified by its code (e.g. `ply` for Paris Gare de Lyon)."""
+    """Served location, identified by its code (e.g. `PLY` for Paris Gare de Lyon).
+
+    Codes are stored in uppercase; sources may send them in any case.
+    """
 
     __tablename__ = "stops"
+    __table_args__ = (CheckConstraint("code = upper(code)", name="code_uppercase"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     code: Mapped[str] = mapped_column(String(16), unique=True)

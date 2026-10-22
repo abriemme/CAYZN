@@ -33,13 +33,13 @@ def test_import_sample_files(session):
 
     assert count(session, Service) == 5
     assert count(session, Stop) == 5
-    assert itinerary(session, "9410") == ["ply", "lpd", "msc"]
+    assert itinerary(session, "9410") == ["PLY", "LPD", "MSC"]
     od = session.scalars(
         select(OriginDestination)
         .join(OriginDestination.service)
         .where(Service.name == "9410", OriginDestination.price == Decimal(20))
     ).one()
-    assert (od.origin.code, od.destination.code) == ("ply", "msc")
+    assert (od.origin.code, od.destination.code) == ("PLY", "MSC")
 
 
 def test_reimport_is_idempotent(session):
@@ -69,14 +69,42 @@ def test_reimport_updates_itinerary_and_price(session, plan):
     import_transport_plan(session, plan)
     session.commit()
 
-    assert itinerary(session, "7866") == ["ply", "lpd", "msc"]
-    assert itinerary(session, "9410") == ["ply", "lpd", "msc"]
+    assert itinerary(session, "7866") == ["PLY", "LPD", "MSC"]
+    assert itinerary(session, "9410") == ["PLY", "LPD", "MSC"]
     prices = session.scalars(
         select(OriginDestination.price)
         .join(OriginDestination.service)
         .where(Service.name == "7866")
     ).all()
     assert prices == [Decimal("55.50")]
+
+
+def test_station_codes_are_stored_uppercase(session, plan):
+    (plan / "stops.csv").write_text(
+        "departure_date,name,stops\n2024-11-14,9410,Ply\n2024-11-14,9410,lpd\n"
+        "2024-11-14,9410,MSC\n"
+    )
+    (plan / "ods.csv").write_text(
+        "departure_date,name,origin,destination\n2024-11-14,9410,pLy,Msc\n"
+    )
+    (plan / "prices.csv").write_text(
+        "departure_date,name,origin,destination,price\n2024-11-14,9410,PLY,msc,20\n"
+    )
+    import_transport_plan(session, plan)
+    session.commit()
+
+    assert set(session.scalars(select(Stop.code))) == {"PLY", "LPD", "MSC"}
+    assert itinerary(session, "9410") == ["PLY", "LPD", "MSC"]
+    od = session.scalars(select(OriginDestination)).one()
+    assert (od.origin.code, od.destination.code, od.price) == ("PLY", "MSC", 20)
+
+
+def test_duplicate_stop_in_another_case_is_rejected(session, plan):
+    (plan / "stops.csv").write_text(
+        "departure_date,name,stops\n2024-11-14,9410,ply\n2024-11-14,9410,PLY\n"
+    )
+    with pytest.raises(TransportPlanError, match="duplicate stop PLY"):
+        import_transport_plan(session, plan)
 
 
 @pytest.mark.parametrize(
