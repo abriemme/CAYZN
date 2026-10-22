@@ -9,9 +9,11 @@ from decimal import Decimal
 from sqlalchemy import (
     CheckConstraint,
     ForeignKey,
+    Index,
     Numeric,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -93,30 +95,41 @@ class OriginDestination(Base):
 class Booking(Base):
     """Booking received by webhook, linked to its OD in the transport plan.
 
-    The raw payload fields are kept as received alongside the resolved links.
+    The service, date and stations of the payload are reachable through
+    `service_id` and `od_id`; only the sale itself is stored here.
+
+    A booking is identified by the sender's `Idempotency-Key` when there is one,
+    otherwise by its natural key (OD, sale time, price, currency).
     """
 
     __tablename__ = "bookings"
     __table_args__ = (
-        CheckConstraint("origin <> destination", name="distinct_stops"),
         CheckConstraint("price >= 0", name="price_positive"),
         CheckConstraint(
             "cancel_datetime IS NULL OR cancel_datetime >= sale_datetime",
             name="cancel_after_sale",
         ),
+        # Only for keyless bookings: two keyed bookings may share these fields
+        # (e.g. two seats sold together).
+        Index(
+            "ix_bookings_natural_key",
+            "od_id",
+            "sale_datetime",
+            "price",
+            "currency",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    service_name: Mapped[str] = mapped_column(String(64))
-    departure_date: Mapped[date]
-    origin: Mapped[str] = mapped_column(String(16))
-    destination: Mapped[str] = mapped_column(String(16))
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), unique=True)
+    service_id: Mapped[int] = mapped_column(ForeignKey("services.id"), index=True)
+    od_id: Mapped[int] = mapped_column(ForeignKey("ods.id"), index=True)
     price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     currency: Mapped[str] = mapped_column(String(3))
     sale_datetime: Mapped[datetime]
     cancel_datetime: Mapped[datetime | None]
-    service_id: Mapped[int] = mapped_column(ForeignKey("services.id"), index=True)
-    od_id: Mapped[int] = mapped_column(ForeignKey("ods.id"), index=True)
 
     service: Mapped[Service] = relationship()
     od: Mapped[OriginDestination] = relationship()

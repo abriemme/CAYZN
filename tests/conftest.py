@@ -67,7 +67,7 @@ def client(session, redis, database_url):
     # NullPool and one Redis client per request: nothing is kept from one
     # TestClient event loop to the next.
     engine = create_async_engine(database_url, poolclass=NullPool)
-    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    sessions = async_sessionmaker(engine)
 
     async def get_test_db():
         async with sessions() as db:

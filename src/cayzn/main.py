@@ -3,11 +3,12 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 from redis import Redis
 from redis_fastapi import AsyncRedisDep, FastAPIRedis
 from redis_fastapi import get_settings as get_redis_settings
-from sqlalchemy import text
+from sqlalchemy import and_, select, text, tuple_
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cayzn import od_cache
@@ -44,17 +45,30 @@ async def health(db: DB) -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/bookings", status_code=status.HTTP_201_CREATED)
+@app.post(
+    "/bookings",
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        200: {"description": "Booking already received (cancellation applied)"},
+        409: {"description": "Idempotency key or cancellation conflicts"},
+    },
+)
 async def create_booking(
-    payload: BookingIn, db: DB, redis: AsyncRedisDep
+    payload: BookingIn,
+    db: DB,
+    redis: AsyncRedisDep,
+    response: Response,
+    idempotency_key: Annotated[str | None, Header(min_length=1, max_length=255)] = None,
 ) -> BookingOut:
-    key = (
-        payload.service_number,
-        payload.departure_date,
-        payload.origin_station_name,
-        payload.destination_station_name,
+    found = await od_cache.lookup(
+        redis,
+        (
+            payload.service_number,
+            payload.departure_date,
+            payload.origin_station_name,
+            payload.destination_station_name,
+        ),
     )
-    found = await od_cache.lookup(redis, key)
     if found is None:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -65,18 +79,64 @@ async def create_booking(
             ),
         )
     service_id, od_id = found
-    booking = Booking(
-        service_name=payload.service_number,
-        departure_date=payload.departure_date,
-        origin=payload.origin_station_name,
-        destination=payload.destination_station_name,
+    sale = (od_id, payload.sale_datetime, payload.price, payload.currency)
+
+    # The database arbitrates duplicates, including concurrent deliveries:
+    # the insert is skipped when the booking already exists.
+    insert_stmt = insert(Booking).values(
+        idempotency_key=idempotency_key,
+        service_id=service_id,
+        od_id=od_id,
         price=payload.price,
         currency=payload.currency,
         sale_datetime=payload.sale_datetime,
         cancel_datetime=payload.cancel_datetime,
-        service_id=service_id,
-        od_id=od_id,
     )
-    db.add(booking)
+    if idempotency_key is None:
+        insert_stmt = insert_stmt.on_conflict_do_nothing(
+            index_elements=["od_id", "sale_datetime", "price", "currency"],
+            index_where=Booking.idempotency_key.is_(None),
+        )
+        match = and_(
+            Booking.idempotency_key.is_(None),
+            tuple_(
+                Booking.od_id, Booking.sale_datetime, Booking.price, Booking.currency
+            )
+            == tuple_(*sale),
+        )
+    else:
+        insert_stmt = insert_stmt.on_conflict_do_nothing(
+            index_elements=["idempotency_key"]
+        )
+        match = Booking.idempotency_key == idempotency_key
+
+    booking_id = await db.scalar(insert_stmt.returning(Booking.id))
+    if booking_id is not None:
+        await db.commit()
+        return BookingOut(id=booking_id, service_id=service_id, od_id=od_id)
+
+    # Already received: lock it so concurrent cancellations apply one at a time.
+    booking = (await db.scalars(select(Booking).where(match).with_for_update())).one()
+    if (
+        booking.od_id,
+        booking.sale_datetime,
+        booking.price,
+        booking.currency,
+    ) != sale:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="Idempotency-Key already used for a different booking",
+        )
+    if payload.cancel_datetime is not None:
+        if booking.cancel_datetime is None:
+            booking.cancel_datetime = payload.cancel_datetime
+        elif booking.cancel_datetime != payload.cancel_datetime:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail="Booking already cancelled at a different time",
+            )
+    response.status_code = status.HTTP_200_OK
+    # Built before commit(): the commit expires the object's attributes.
+    out = BookingOut.model_validate(booking)
     await db.commit()
-    return BookingOut.model_validate(booking)
+    return out

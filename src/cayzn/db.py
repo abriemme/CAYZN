@@ -10,7 +10,7 @@ from cayzn.settings import settings
 engine = create_engine(str(settings.database_url))
 SessionLocal = sessionmaker(bind=engine)
 async_engine = create_async_engine(str(settings.database_url))
-AsyncSessionLocal = async_sessionmaker(async_engine, expire_on_commit=False)
+AsyncSessionLocal = async_sessionmaker(async_engine)
 
 
 class Base(DeclarativeBase):
