@@ -69,3 +69,44 @@ def test_ensure_loaded_only_loads_missing_cache(session, redis):
     redis.delete(od_cache.KEY)
     od_cache.ensure_loaded(session, redis)
     assert redis.hlen(od_cache.KEY) == 5
+
+
+KNOWN = ("9410", date(2024, 11, 14), "LPD", "MSC")
+
+
+def test_found_od_is_served_locally_without_redis(session, redis):
+    load_plan(session)
+    od_cache.reload(session, redis)
+    found = lookup(KNOWN)
+
+    redis.delete(od_cache.KEY)
+
+    assert lookup(KNOWN) == found
+    assert lookup(("9410", date(2024, 11, 14), "lpd", "msc")) == found
+
+
+def test_missing_od_is_not_cached_locally(session, redis):
+    assert lookup(KNOWN) is None
+
+    load_plan(session)
+    od_cache.reload(session, redis)
+
+    assert lookup(KNOWN) is not None
+
+
+def test_least_recently_used_entry_is_evicted(session, redis, monkeypatch):
+    monkeypatch.setattr(od_cache, "LOCAL_MAX_ENTRIES", 2)
+    load_plan(session)
+    od_cache.reload(session, redis)
+    ply_lpd = ("9410", date(2024, 11, 14), "PLY", "LPD")
+    ply_msc = ("9410", date(2024, 11, 14), "PLY", "MSC")
+
+    lookup(KNOWN)
+    lookup(ply_lpd)
+    lookup(KNOWN)  # KNOWN becomes the most recently used
+    lookup(ply_msc)  # evicts ply_lpd
+    redis.delete(od_cache.KEY)
+
+    assert lookup(KNOWN) is not None
+    assert lookup(ply_msc) is not None
+    assert lookup(ply_lpd) is None

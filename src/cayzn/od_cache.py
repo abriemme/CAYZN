@@ -7,6 +7,7 @@ never a half-loaded plan.
 """
 
 import json
+from collections import OrderedDict
 from datetime import date
 from itertools import batched
 from uuid import uuid4
@@ -20,6 +21,20 @@ from sqlalchemy.orm import Session, aliased
 from cayzn.models import OriginDestination, Service, Stop
 
 KEY: str = "cayzn:ods"
+
+# Per-process LRU in front of Redis, saving a round trip on repeated ODs.
+# Only found ODs are kept: they never go stale, since the import neither deletes
+# ODs nor changes their ids. Misses always go to Redis, so ODs added by the
+# nightly import are seen as soon as Redis is reloaded.
+LOCAL_MAX_ENTRIES = 100_000
+_local: OrderedDict[str, tuple[int, int]] = OrderedDict()
+
+
+def clear_local() -> None:
+    """Empty this process's LRU (needed if the database is reset under it)."""
+    _local.clear()
+
+
 _BATCH = 10_000
 
 ODKey = tuple[str, date, str, str]
@@ -83,8 +98,16 @@ def ensure_loaded(session: Session, redis: Redis) -> None:
 async def lookup(
     redis: AsyncRedis | AsyncRedisCluster, key: ODKey
 ) -> tuple[int, int] | None:
-    value = await redis.hget(KEY, _field(key))
+    field = _field(key)
+    if (found := _local.get(field)) is not None:
+        _local.move_to_end(field)
+        return found
+
+    value = await redis.hget(KEY, field)
     if value is None:
         return None
     service_id, od_id = map(int, value.split())
+    _local[field] = service_id, od_id
+    if len(_local) > LOCAL_MAX_ENTRIES:
+        _local.popitem(last=False)
     return service_id, od_id

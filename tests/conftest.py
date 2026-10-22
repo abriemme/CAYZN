@@ -46,8 +46,11 @@ def redis_key(worker_id):
 def redis():
     with Redis.from_url(str(settings.redis_url)) as redis:
         redis.delete(od_cache.KEY)
+        # Ids restart at 1 after TRUNCATE: a previous test's entries would be wrong.
+        od_cache.clear_local()
         yield redis
         redis.delete(od_cache.KEY)
+        od_cache.clear_local()
 
 
 @pytest.fixture

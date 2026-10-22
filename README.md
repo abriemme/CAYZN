@@ -18,6 +18,7 @@ New migration after changing `src/cayzn/models.py`:
 
 `REDIS_URL` (default: `redis://localhost:6379/0`): cache `(service, date, origin, destination) → (service_id, od_id)`
 used by `POST /bookings`. Loaded on API startup if missing, reloaded after each import.
+Each API process keeps found ODs in an in-memory LRU in front of Redis.
 
 `POST /bookings` is idempotent: a booking is identified by the `Idempotency-Key` header when sent,
 otherwise by (OD, sale time, price, currency). A redelivery returns the existing booking (200);
