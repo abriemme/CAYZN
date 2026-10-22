@@ -23,3 +23,12 @@ repos:
     rev: 0.13.5
     hooks:
       - id: uv-lock
+
+  - repo: local
+    hooks:
+      - id: ty
+        name: ty check
+        entry: uv run ty check
+        language: system
+        types: [python]
+        pass_filenames: false
