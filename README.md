@@ -2,8 +2,8 @@
 ## Getting started
 
 ```bash
-uv sync
-uv run fastapi dev src/cayzn/main.py   # http://127.0.0.1:8000/docs
+just install
+just run  # http://127.0.0.1:8000/docs
 just check                             # lint, format, types (ty)
 just test                              # requires Postgres and Redis (throwaway cayzn_test_* databases)
 just migrate                           # alembic upgrade head
