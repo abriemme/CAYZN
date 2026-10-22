@@ -1,8 +1,8 @@
 # Transcripts
 
-Toutes les conversations avec les agents de développement sont archivées ici, brutes et non éditées, tentatives abandonnées comprises.
+Every conversation with the development agents is archived here, raw and unedited, abandoned attempts included.
 
-- `raw/<session_id>.jsonl` : export brut des sessions Claude Code, copié automatiquement à chaque tour par un hook (`.claude/settings.json` → `scripts/sync_transcripts.sh`). Le mécanisme est externe à l'agent, qui ne peut ni l'oublier ni le contourner.
-- `<session_id>.md` : rendu lisible du fichier brut correspondant (`scripts/render_transcript.py`).
+- `raw/<session_id>.jsonl`: raw export of the Claude Code sessions, copied automatically on every turn by a hook (`.claude/settings.json` → `scripts/sync_transcripts.sh`). The mechanism is external to the agent, which can neither forget nor bypass it.
+- `<session_id>.md`: readable rendering of the matching raw file (`scripts/render_transcript.py`).
 
-Rien n'est édité à la main dans ce dossier.
+Nothing in this folder is edited by hand.
