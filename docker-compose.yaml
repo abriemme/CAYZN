@@ -1,4 +1,29 @@
+x-app: &app
+  build: .
+  environment:
+    DATABASE_URL: postgresql+psycopg://cayzn:cayzn@db:5432/cayzn
+    REDIS_URL: redis://redis:6379/0
+
 services:
+  api:
+    <<: *app
+    command: uvicorn cayzn.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      worker:
+        condition: service_completed_successfully
+
+  # One-shot: applies the migrations, imports the transport plan, reloads the cache.
+  worker:
+    <<: *app
+    command: sh -c "alembic upgrade head && python -m cayzn.importer files"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   db:
     image: postgres:18-alpine
     environment:

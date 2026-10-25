@@ -29,4 +29,6 @@ The import creates the partitions for the months of the plan; a departed month i
 `DROP TABLE bookings_YYYY_MM`. Postgres cannot enforce uniqueness across partitions: the
 `Idempotency-Key` and the natural key are unique per departure date.
 
-Local Postgres and Redis: `docker compose up -d`.
+Whole stack in Docker (`db`, `redis`, `worker`, `api`): `docker compose up --build`, then http://127.0.0.1:8000/docs.
+`worker` is a one-shot job: it applies the migrations and imports `files/` into the database and the Redis cache; `api` starts once it has succeeded.
+Only `db` and `redis` for a local `just run`: `docker compose up -d db redis`.
