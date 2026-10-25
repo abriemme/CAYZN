@@ -24,4 +24,6 @@ Each API process keeps found ODs in an in-memory LRU in front of Redis.
 otherwise by (OD, sale time, price, currency). A redelivery returns the existing booking (200);
 one carrying `cancel_datetime` cancels it.
 
-Local Postgres and Redis: `docker compose up -d`.
+Whole stack in Docker (`db`, `redis`, `worker`, `api`): `docker compose up --build`, then http://127.0.0.1:8000/docs.
+`worker` is a one-shot job: it applies the migrations and imports `files/` into the database and the Redis cache; `api` starts once it has succeeded.
+Only `db` and `redis` for a local `just run`: `docker compose up -d db redis`.
