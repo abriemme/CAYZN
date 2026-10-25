@@ -85,7 +85,6 @@ async def create_booking(
     # the insert is skipped when the booking already exists.
     insert_stmt = insert(Booking).values(
         idempotency_key=idempotency_key,
-        departure_date=payload.departure_date,
         service_id=service_id,
         od_id=od_id,
         price=payload.price,
@@ -95,13 +94,7 @@ async def create_booking(
     )
     if idempotency_key is None:
         insert_stmt = insert_stmt.on_conflict_do_nothing(
-            index_elements=[
-                "od_id",
-                "sale_datetime",
-                "price",
-                "currency",
-                "departure_date",
-            ],
+            index_elements=["od_id", "sale_datetime", "price", "currency"],
             index_where=Booking.idempotency_key.is_(None),
         )
         match = and_(
@@ -113,11 +106,9 @@ async def create_booking(
         )
     else:
         insert_stmt = insert_stmt.on_conflict_do_nothing(
-            index_elements=["idempotency_key", "departure_date"]
+            index_elements=["idempotency_key"]
         )
         match = Booking.idempotency_key == idempotency_key
-    # The partition key: the lookup only opens the month's partition.
-    match = and_(match, Booking.departure_date == payload.departure_date)
 
     booking_id = await db.scalar(insert_stmt.returning(Booking.id))
     if booking_id is not None:
