@@ -1,10 +1,11 @@
 import asyncio
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
 import httpx
 import pytest
+from sqlalchemy import text
 
 from cayzn import od_cache
 from cayzn.importer import import_transport_plan
@@ -25,6 +26,7 @@ PAYLOAD = {
     "sale_datetime": "2024-04-28T04:55:27",
     "cancel_datetime": None,
 }
+DEPARTURE = date(2024, 11, 14)
 
 
 @pytest.fixture
@@ -40,7 +42,7 @@ def test_booking_is_stored_and_linked(client, session, plan):
     )
 
     assert response.status_code == 201
-    booking = session.get(Booking, response.json()["id"])
+    booking = session.get(Booking, (response.json()["id"], DEPARTURE))
     assert booking is not None
     assert booking.price == Decimal(10)
     assert booking.sale_datetime == datetime(2024, 4, 28, 4, 55, 27)
@@ -53,6 +55,14 @@ def test_booking_is_stored_and_linked(client, session, plan):
         "service_id": booking.service_id,
         "od_id": booking.od_id,
     }
+    # Stored in the partition of the departure month, with its plan.
+    assert (
+        session.scalar(
+            text("SELECT tableoid::regclass::text FROM bookings WHERE id = :id"),
+            {"id": booking.id},
+        )
+        == "bookings_2024_11"
+    )
 
 
 @pytest.mark.parametrize(
@@ -66,7 +76,7 @@ def test_station_codes_are_case_insensitive(client, session, plan, origin, desti
     )
 
     assert response.status_code == 201
-    booking = session.get(Booking, response.json()["id"])
+    booking = session.get(Booking, (response.json()["id"], DEPARTURE))
     assert booking is not None
     assert (booking.od.origin.code, booking.od.destination.code) == ("LPD", "MSC")
 

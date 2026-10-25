@@ -24,6 +24,11 @@ Each API process keeps found ODs in an in-memory LRU in front of Redis.
 otherwise by (OD, sale time, price, currency). A redelivery returns the existing booking (200);
 one carrying `cancel_datetime` cancels it.
 
+`bookings` is partitioned by month of the service's departure date (`bookings_YYYY_MM`).
+The import creates the partitions for the months of the plan; a departed month is archived with
+`DROP TABLE bookings_YYYY_MM`. Postgres cannot enforce uniqueness across partitions: the
+`Idempotency-Key` and the natural key are unique per departure date.
+
 Whole stack in Docker (`db`, `redis`, `worker`, `api`): `docker compose up --build`, then http://127.0.0.1:8000/docs.
 `worker` is a one-shot job: it applies the migrations and imports `files/` into the database and the Redis cache; `api` starts once it has succeeded.
 Only `db` and `redis` for a local `just run`: `docker compose up -d db redis`.

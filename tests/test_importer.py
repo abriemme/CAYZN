@@ -3,7 +3,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from cayzn.importer import TransportPlanError, import_transport_plan
 from cayzn.models import OriginDestination, Service, ServiceStop, Stop
@@ -40,6 +40,29 @@ def test_import_sample_files(session):
         .where(Service.name == "9410", OriginDestination.price == Decimal(20))
     ).one()
     assert (od.origin.code, od.destination.code) == ("PLY", "MSC")
+
+
+def test_import_creates_the_month_partitions_of_bookings(session, plan):
+    (plan / "trains.csv").write_text(
+        "departure_date,name\n2024-11-14,9410\n2030-01-31,1\n"
+    )
+    (plan / "stops.csv").write_text("departure_date,name,stops\n")
+    (plan / "ods.csv").write_text("departure_date,name,origin,destination\n")
+    (plan / "prices.csv").write_text("departure_date,name,origin,destination,price\n")
+    import_transport_plan(session, plan)
+    session.commit()
+
+    bounds = session.scalars(
+        text(
+            "SELECT pg_get_expr(c.relpartbound, c.oid) FROM pg_class c"
+            " JOIN pg_inherits i ON i.inhrelid = c.oid"
+            " WHERE i.inhparent = 'bookings'::regclass ORDER BY 1"
+        )
+    ).all()
+    assert bounds == [
+        "FOR VALUES FROM ('2024-11-01') TO ('2024-12-01')",
+        "FOR VALUES FROM ('2030-01-01') TO ('2030-02-01')",
+    ]
 
 
 def test_reimport_is_idempotent(session):
