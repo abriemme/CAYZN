@@ -1,13 +1,16 @@
 import asyncio
+import base64
+import binascii
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from datetime import date
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
 from redis import Redis
 from redis_fastapi import AsyncRedisDep, FastAPIRedis
 from redis_fastapi import get_settings as get_redis_settings
-from sqlalchemy import and_, func, select, text
+from sqlalchemy import and_, func, select, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
@@ -35,6 +38,8 @@ from cayzn.schemas import (
     PriceChangeOut,
     PriceIn,
     PriceOut,
+    ServiceOut,
+    ServicesPage,
 )
 from cayzn.settings import settings
 from cayzn.worker import request_compute
@@ -142,6 +147,77 @@ def _od_out(od: OriginDestination, recommended: RecommendedPrice | None) -> ODOu
         price=od.price,
         recommended_price=recommended.price if recommended else None,
     )
+
+
+def _encode_cursor(departure_date: date, name: str) -> str:
+    raw = f"{departure_date.isoformat()}|{name}".encode()
+    return base64.urlsafe_b64encode(raw).decode()
+
+
+def _decode_cursor(cursor: str) -> tuple[date, str]:
+    try:
+        departure_date, name = base64.urlsafe_b64decode(cursor).decode().split("|", 1)
+        return date.fromisoformat(departure_date), name
+    except binascii.Error, UnicodeDecodeError, ValueError:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Invalid cursor"
+        ) from None
+
+
+@app.get("/services")
+async def list_services(
+    db: DB,
+    departure_date_from: Annotated[
+        date | None, Query(description="Defaults to today (server local date)")
+    ] = None,
+    departure_date_to: Annotated[date | None, Query(description="Inclusive")] = None,
+    cursor: Annotated[str | None, Query(description="`next_cursor` of a page")] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
+) -> ServicesPage:
+    """Services departing from a date on, with their revenue, booking count and
+    minimum price, ordered by departure date then name.
+    """
+    departure_date_from = departure_date_from or date.today()
+    if departure_date_to is not None and departure_date_to < departure_date_from:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="departure_date_to must not precede departure_date_from",
+        )
+
+    live = and_(Booking.service_id == Service.id, Booking.cancel_datetime.is_(None))
+    revenue = select(func.coalesce(func.sum(Booking.price), 0)).where(live)
+    booking_count = select(func.count()).select_from(Booking).where(live)
+    min_price = select(func.min(OriginDestination.price)).where(
+        OriginDestination.service_id == Service.id
+    )
+    stmt = (
+        select(
+            Service.id,
+            Service.name,
+            Service.departure_date,
+            revenue.scalar_subquery().label("revenue"),
+            booking_count.scalar_subquery().label("booking_count"),
+            min_price.scalar_subquery().label("min_price"),
+        )
+        .where(Service.departure_date >= departure_date_from)
+        .order_by(Service.departure_date, Service.name)
+        # One extra row tells whether there is a next page.
+        .limit(limit + 1)
+    )
+    if departure_date_to is not None:
+        stmt = stmt.where(Service.departure_date <= departure_date_to)
+    if cursor is not None:
+        stmt = stmt.where(
+            tuple_(Service.departure_date, Service.name) > _decode_cursor(cursor)
+        )
+
+    rows = (await db.execute(stmt)).all()
+    items = [ServiceOut.model_validate(row) for row in rows[:limit]]
+    next_cursor = None
+    if len(rows) > limit:
+        last = items[-1]
+        next_cursor = _encode_cursor(last.departure_date, last.name)
+    return ServicesPage(items=items, next_cursor=next_cursor)
 
 
 @app.get("/services/{service_id}/ods")
