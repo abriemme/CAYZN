@@ -31,6 +31,10 @@ _Avoid_: Fare, tariff
 A change of an OD's Current price, by the nightly import or by an analyst, who may be applying a Recommended price. Kept as history.
 _Avoid_: Price update, override
 
+**Minimum price**:
+The lowest Current price among the ODs of a Service. Undefined when none of its ODs has a Current price.
+_Avoid_: Floor price, lowest fare
+
 ## Bookings
 
 **Booking**:
@@ -40,6 +44,10 @@ _Avoid_: Reservation, ticket, sale
 **Cancellation**:
 The undoing of a Booking, recorded as the time it was cancelled on that Booking.
 _Avoid_: Refund
+
+**Revenue**:
+The sum of the prices of a Service's Bookings, Cancellations excluded.
+_Avoid_: Sales, turnover, income
 
 ## Revenue management
 

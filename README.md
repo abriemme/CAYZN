@@ -37,6 +37,10 @@ logged, never retried: the next request runs a new one. Run several `just worker
 The analyst's API, each response carrying a `freshness` block (when the last forecast and optimization were
 computed, `stale` if bookings arrived since, `pending` if a job is waiting; all null without a run):
 
+- `GET /services`: the services departing from `departure_date_from` (default: today, server local date)
+  to `departure_date_to` (inclusive, optional), ordered by date then name, with their revenue (sum of
+  non-cancelled booking prices), booking count and minimum OD price. Pages of `limit` (default and max 100)
+  rows; pass the returned `next_cursor` with the same filters to get the next page. No `freshness` block.
 - `GET /services/{id}/ods`: the grid, each OD's current price and the price recommended by the last optimization.
 - `PUT /ods/{id}/price` with `{"price": 42}`: change the price; add `"forecast_id"` (from the grid) to apply
   that run's recommendation, which the price must equal (409 otherwise). Every change is kept in
