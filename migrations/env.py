@@ -1,7 +1,4 @@
-import re
-from collections.abc import MutableMapping
 from logging.config import fileConfig
-from typing import Any
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
@@ -22,16 +19,6 @@ if config.config_file_name is not None:
 # Escape %: Alembic config interpolates values (URL-encoded passwords).
 config.set_main_option("sqlalchemy.url", str(settings.database_url).replace("%", "%%"))
 target_metadata = Base.metadata
-
-# Partitions are created by the import, not by migrations: not part of the models.
-PARTITION = re.compile(r"bookings_\d{4}_\d{2}")
-
-
-def include_name(
-    name: str | None, type_: str, parent_names: MutableMapping[Any, str | None]
-) -> bool:
-    return not (type_ == "table" and name and PARTITION.fullmatch(name))
-
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
@@ -55,7 +42,6 @@ def run_migrations_offline() -> None:
     context.configure(
         url=url,
         target_metadata=target_metadata,
-        include_name=include_name,
         render_as_batch=True,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -82,7 +68,6 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            include_name=include_name,
             render_as_batch=True,  # ALTER TABLE on SQLite
         )
 
