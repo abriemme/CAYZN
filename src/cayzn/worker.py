@@ -172,7 +172,7 @@ async def forecast_and_optimize(service_id: int) -> None:
         forecast = Forecast(
             service_id=service_id,
             current_day_x=current_day_x,
-            # Same count as `freshness.bookings_count`.
+            # Same count as the one `freshness.runs` compares it with.
             bookings_as_of=sum(1 + (cancel is not None) for _, _, cancel in bookings),
         )
         db.add(forecast)
