@@ -30,6 +30,7 @@ async def record_booking(
     insert_stmt = insert(Booking).values(
         departure_date=payload.departure_date,  # partition key
         idempotency_key=idempotency_key,
+        departure_date=payload.departure_date,
         service_id=service_id,
         od_id=od_id,
         price=payload.price,
@@ -60,6 +61,8 @@ async def record_booking(
             index_elements=["idempotency_key", "departure_date"]
         )
         match = Booking.idempotency_key == idempotency_key
+    # The partition key: the lookup only opens the month's partition.
+    match = and_(match, Booking.departure_date == payload.departure_date)
 
     booking_id = await db.scalar(insert_stmt.returning(Booking.id))
     if booking_id is not None:
