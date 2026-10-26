@@ -27,6 +27,12 @@ def request(session, *service_ids):
     session.add_all(ComputeRequest(service_id=i) for i in service_ids)
     session.commit()
 
+def run_worker(database_url, conninfo, monkeypatch):
+    """Run the jobs queued so far, on the test database, without delays."""
+    monkeypatch.setattr(worker, "FORECAST_SECONDS", (0, 0))
+    monkeypatch.setattr(worker, "OPTIMIZATION_SECONDS", (0, 0))
+    engine = create_async_engine(database_url, poolclass=NullPool)
+    monkeypatch.setattr(worker, "AsyncSessionLocal", async_sessionmaker(engine))
 
 def test_bookings_do_not_request_a_job(client, session, plan):
     post(client, PAYLOAD)

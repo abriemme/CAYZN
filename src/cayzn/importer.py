@@ -9,12 +9,12 @@ Everything runs in a single transaction: one invalid row aborts the whole import
 import csv
 import sys
 from collections.abc import Iterator
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from redis import Redis
-from sqlalchemy import Engine, select, text
+from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from cayzn import od_cache
@@ -59,35 +59,11 @@ def _service_key(where: str, row: dict[str, str]) -> ServiceKey:
         ) from None
 
 
-def ensure_partitions(engine: Engine, months: set[date]) -> None:
-    """Create the monthly `bookings` partitions for `months` (first days).
-
-    Each CREATE runs in its own transaction: it takes an exclusive lock on
-    `bookings`, which held for the whole import would block POST /bookings.
-    Call it before the importing session touches `bookings`, or the two
-    connections wait for each other.
-    """
-    # ponytail: monthly partitions; make this a setting if a month gets too big.
-    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-        for first in sorted(months):
-            nxt = (first + timedelta(days=31)).replace(day=1)
-            conn.execute(
-                text(
-                    f"CREATE TABLE IF NOT EXISTS bookings_{first:%Y_%m} "
-                    f"PARTITION OF bookings "
-                    f"FOR VALUES FROM ('{first}') TO ('{nxt}')"
-                )
-            )
-
-
 def import_transport_plan(session: Session, directory: Path) -> None:
     keys = [
         _service_key(where, row)
         for where, row in _rows(directory / "trains.csv", {"departure_date", "name"})
     ]
-    bind = session.get_bind()
-    assert isinstance(bind, Engine)
-    ensure_partitions(bind, {d.replace(day=1) for _, d in keys})
 
     # Preload existing services to avoid one query per row.
     existing = session.scalars(

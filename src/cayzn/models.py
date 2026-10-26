@@ -3,12 +3,6 @@ bookings, and the forecasts and recommended prices computed from them, and
 their queue.
 
 These ORM models are deliberately separate from the API's Pydantic schemas.
-
-Bookings are range-partitioned by month of `departure_date` (Postgres declarative
-partitioning): revenue management reads them by departure date, so a query only
-scans the months it needs, and a past month is archived by dropping its partition.
-Postgres requires the partition key in the primary key and every unique
-constraint. The nightly import creates the partitions (`importer.ensure_partitions`).
 """
 
 from datetime import date, datetime
@@ -135,14 +129,11 @@ class PriceChange(Base):
 class Booking(Base):
     """Booking received by webhook, linked to its OD in the transport plan.
 
-    The service and stations of the payload are reachable through `service_id`
-    and `od_id`; only the sale itself is stored here, plus the service's
-    `departure_date` as the partition key.
+    The service, date and stations of the payload are reachable through
+    `service_id` and `od_id`; only the sale itself is stored here.
 
     A booking is identified by the sender's `Idempotency-Key` when there is one,
-    otherwise by its natural key (OD, sale time, price, currency). Both are
-    unique per departure date: Postgres cannot enforce uniqueness across
-    partitions, so the same key sent for two departure dates stores two bookings.
+    otherwise by its natural key (OD, sale time, price, currency).
     """
 
     __tablename__ = "bookings"
@@ -152,7 +143,6 @@ class Booking(Base):
             "cancel_datetime IS NULL OR cancel_datetime >= sale_datetime",
             name="cancel_after_sale",
         ),
-        UniqueConstraint("idempotency_key", "departure_date"),
         # Only for keyless bookings: two keyed bookings may share these fields
         # (e.g. two seats sold together).
         Index(
@@ -161,16 +151,13 @@ class Booking(Base):
             "sale_datetime",
             "price",
             "currency",
-            "departure_date",
             unique=True,
             postgresql_where=text("idempotency_key IS NULL"),
         ),
-        {"postgresql_partition_by": "RANGE (departure_date)"},
     )
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    departure_date: Mapped[date] = mapped_column(primary_key=True)
-    idempotency_key: Mapped[str | None] = mapped_column(String(255))
+    id: Mapped[int] = mapped_column(primary_key=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), unique=True)
     service_id: Mapped[int] = mapped_column(ForeignKey("services.id"), index=True)
     od_id: Mapped[int] = mapped_column(ForeignKey("ods.id"), index=True)
     price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
