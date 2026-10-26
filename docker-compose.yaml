@@ -18,7 +18,7 @@ services:
   # cache, requests the runs (`just worker` processes them).
   worker:
     <<: *app
-    command: sh -c "alembic upgrade head && python -m cayzn.importer files && python -m cayzn.worker request-all"
+    command: sh -c "alembic upgrade head && python -m cayzn.worker"
     depends_on:
       db:
         condition: service_healthy
