@@ -28,9 +28,7 @@ async def record_booking(
     # The database arbitrates duplicates, including concurrent deliveries:
     # the insert is skipped when the booking already exists.
     insert_stmt = insert(Booking).values(
-        departure_date=payload.departure_date,  # partition key
         idempotency_key=idempotency_key,
-        departure_date=payload.departure_date,
         service_id=service_id,
         od_id=od_id,
         price=payload.price,
@@ -45,7 +43,6 @@ async def record_booking(
                 "sale_datetime",
                 "price",
                 "currency",
-                "departure_date",
             ],
             index_where=Booking.idempotency_key.is_(None),
         )
@@ -58,11 +55,9 @@ async def record_booking(
         )
     else:
         insert_stmt = insert_stmt.on_conflict_do_nothing(
-            index_elements=["idempotency_key", "departure_date"]
+            index_elements=["idempotency_key"]
         )
         match = Booking.idempotency_key == idempotency_key
-    # The partition key: the lookup only opens the month's partition.
-    match = and_(match, Booking.departure_date == payload.departure_date)
 
     booking_id = await db.scalar(insert_stmt.returning(Booking.id))
     if booking_id is not None:
@@ -70,13 +65,7 @@ async def record_booking(
         return booking_id, True
 
     # Already received: lock it so concurrent cancellations apply one at a time.
-    booking = (
-        await db.scalars(
-            select(Booking)
-            .where(Booking.departure_date == payload.departure_date, match)
-            .with_for_update()
-        )
-    ).one()
+    booking = (await db.scalars(select(Booking).where(match).with_for_update())).one()
     if (
         booking.od_id,
         booking.sale_datetime,
