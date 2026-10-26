@@ -8,6 +8,7 @@ queues a new one.
 
 import asyncio
 import logging
+import random
 import signal
 
 import psycopg
@@ -35,9 +36,15 @@ LOCK_SPACE = 1
 # Woken by NOTIFY; polls too, in case a notification came while disconnected.
 POLL_SECONDS = 5.0
 
-# Simulated duration of the placeholder algorithms; tests set them to 0.
-FORECAST_SECONDS = 1.0
-OPTIMIZATION_SECONDS = 5.0
+# Simulated duration of the placeholder algorithms, (mean, std) of a normal
+# distribution; tests set them to (0, 0).
+FORECAST_SECONDS = (1.0, 0.2)
+OPTIMIZATION_SECONDS = (5.0, 1.0)
+
+
+async def simulate(seconds: tuple[float, float]) -> None:
+    await asyncio.sleep(max(0.0, random.gauss(*seconds)))
+
 
 # Oldest waiting service, skipping those running on another worker: they stay
 # queued, and that worker takes them next.
@@ -141,7 +148,7 @@ async def forecast_and_optimize(service_id: int) -> None:
         ).all()
 
         result = revenue_management.forecast(service.departure_date, prices, bookings)
-        await asyncio.sleep(FORECAST_SECONDS)
+        await simulate(FORECAST_SECONDS)
         if result is None:
             return
         current_day_x, curves = result
@@ -154,7 +161,7 @@ async def forecast_and_optimize(service_id: int) -> None:
         await db.commit()
 
         recommended = revenue_management.optimize(current_day_x, curves, prices)
-        await asyncio.sleep(OPTIMIZATION_SECONDS)
+        await simulate(OPTIMIZATION_SECONDS)
         db.add_all(
             RecommendedPrice(forecast_id=forecast_id, od_id=od_id, price=price)
             for od_id, price in recommended.items()
