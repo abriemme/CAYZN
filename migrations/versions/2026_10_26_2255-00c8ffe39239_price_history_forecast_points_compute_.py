@@ -1,9 +1,7 @@
 """price history, forecast points, compute requests
 
-Merges the forecasts and partitioning branches.
-
 Revision ID: 00c8ffe39239
-Revises: 219eacbb330e, 342560179c01
+Revises: 219eacbb330e
 Create Date: 2026-10-26 22:55:32.465908
 
 """
@@ -16,7 +14,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "00c8ffe39239"
-down_revision: str | Sequence[str] | None = ("219eacbb330e", "342560179c01")
+down_revision: str | Sequence[str] | None = "219eacbb330e"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

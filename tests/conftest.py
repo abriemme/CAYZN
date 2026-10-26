@@ -110,8 +110,8 @@ def conninfo(database_url):
 @pytest.fixture
 def run_worker(database_url, conninfo, monkeypatch):
     """Run the jobs requested so far, on the test database, without delays."""
-    monkeypatch.setattr(worker, "FORECAST_SECONDS", 0)
-    monkeypatch.setattr(worker, "OPTIMIZATION_SECONDS", 0)
+    monkeypatch.setattr(worker, "FORECAST_SECONDS", (0, 0))
+    monkeypatch.setattr(worker, "OPTIMIZATION_SECONDS", (0, 0))
     engine = create_async_engine(database_url, poolclass=NullPool)
     monkeypatch.setattr(worker, "AsyncSessionLocal", async_sessionmaker(engine))
 
