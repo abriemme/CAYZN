@@ -14,10 +14,11 @@ services:
       worker:
         condition: service_completed_successfully
 
-  # One-shot: applies the migrations, imports the transport plan, reloads the cache.
+  # One-shot: applies the migrations, imports the transport plan, reloads the
+  # cache, requests the runs (`just worker` processes them).
   worker:
     <<: *app
-    command: sh -c "alembic upgrade head && python -m cayzn.importer files"
+    command: sh -c "alembic upgrade head && python -m cayzn.importer files && python -m cayzn.worker request-all"
     depends_on:
       db:
         condition: service_healthy

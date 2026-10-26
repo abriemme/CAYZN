@@ -4,7 +4,7 @@ from decimal import Decimal
 import pytest
 
 from cayzn import revenue_management
-from cayzn.revenue_management import Curves, optimize
+from cayzn.revenue_management import Curves, observed_curve, optimize
 
 DEPARTURE = date(2024, 11, 14)
 
@@ -62,6 +62,15 @@ def test_cancellation_after_the_last_sale_is_observed():
 
     assert current == 3
     assert curves["1"][3] == 1
+
+
+def test_observed_curve_counts_cancellations_when_cancelled():
+    bookings = [(1, at(10), None), (1, at(9), at(7)), (2, at(8), None)]
+
+    assert observed_curve(DEPARTURE, bookings) == {10: 1, 9: 2, 8: 3, 7: 2}
+    assert observed_curve(DEPARTURE, bookings, od_id=1) == {10: 1, 9: 2, 8: 2, 7: 1}
+    assert observed_curve(DEPARTURE, bookings, od_id=3) == {10: 0, 9: 0, 8: 0, 7: 0}
+    assert observed_curve(DEPARTURE, []) == {}
 
 
 def test_nothing_to_forecast_after_departure():

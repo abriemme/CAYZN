@@ -1,12 +1,12 @@
-"""Transport plan (services, stops, ODs, current prices), bookings, and the
-forecasts and recommended prices computed from them, and their queue.
+"""Transport plan (services, stops, ODs, current prices and their history),
+bookings, and the forecasts and recommended prices computed from them, and
+their queue.
 
 These ORM models are deliberately separate from the API's Pydantic schemas.
 """
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
 
 from sqlalchemy import (
     CheckConstraint,
@@ -19,7 +19,6 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from cayzn.db import Base
@@ -75,7 +74,11 @@ class ServiceStop(Base):
 
 
 class OriginDestination(Base):
-    """Bookable trip between two stops of a service, with its current price."""
+    """Bookable trip between two stops of a service, with its current price.
+
+    `price` is the last `price_changes` row of the OD, denormalised so the
+    grid reads it without a subquery; `prices.change_price` keeps both in step.
+    """
 
     __tablename__ = "ods"
     __table_args__ = (
@@ -95,6 +98,32 @@ class OriginDestination(Base):
     service: Mapped[Service] = relationship(back_populates="ods")
     origin: Mapped[Stop] = relationship(foreign_keys=[origin_id])
     destination: Mapped[Stop] = relationship(foreign_keys=[destination_id])
+
+
+class PriceChange(Base):
+    """Change of an OD's price: by the nightly import, or by an analyst, who
+    may apply the price recommended by a run (`forecast_id`)."""
+
+    __tablename__ = "price_changes"
+    __table_args__ = (
+        CheckConstraint("price >= 0", name="price_positive"),
+        CheckConstraint("source IN ('import', 'analyst')", name="source_known"),
+        Index("ix_price_changes_od_id_changed_at", "od_id", "changed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    od_id: Mapped[int] = mapped_column(ForeignKey("ods.id", ondelete="CASCADE"))
+    price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    previous_price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    source: Mapped[str] = mapped_column(String(16))
+    forecast_id: Mapped[int | None] = mapped_column(
+        ForeignKey("forecasts.id", ondelete="SET NULL")
+    )
+
+    od: Mapped[OriginDestination] = relationship()
 
 
 class Booking(Base):
@@ -141,10 +170,11 @@ class Booking(Base):
 
 
 class Forecast(Base):
-    """Forecast of a service, kept for every run (append-only).
+    """Run of a service's forecast, then optimization; kept for every run.
 
-    `curves` maps "service" and each OD id to {day-x: expected bookings},
-    from `current_day_x` down to day-0.
+    `bookings_as_of` counts the sales and cancellations the run read: compared
+    with the service's current count, it tells whether the run is stale.
+    `optimized_at` is set once the run's recommended prices are stored.
     """
 
     __tablename__ = "forecasts"
@@ -156,8 +186,28 @@ class Forecast(Base):
     computed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    optimized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     current_day_x: Mapped[int]
-    curves: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    bookings_as_of: Mapped[int]
+
+
+class ForecastPoint(Base):
+    """Expected bookings of an OD at a day-x not yet observed, from the run's
+    `current_day_x` down to day-0. The service's curve is the sum of its ODs'.
+    """
+
+    # ponytail: one run a day per service, every run kept; purge old runs'
+    # points if the table gets too big.
+    __tablename__ = "forecast_points"
+
+    forecast_id: Mapped[int] = mapped_column(
+        ForeignKey("forecasts.id", ondelete="CASCADE"), primary_key=True
+    )
+    od_id: Mapped[int] = mapped_column(
+        ForeignKey("ods.id", ondelete="CASCADE"), primary_key=True
+    )
+    day_x: Mapped[int] = mapped_column(primary_key=True)
+    bookings: Mapped[float]
 
 
 class RecommendedPrice(Base):
@@ -175,13 +225,15 @@ class RecommendedPrice(Base):
     price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
 
 
-class PendingForecast(Base):
+class ComputeRequest(Base):
     """Service waiting for its forecast and optimization job (the worker's queue).
 
-    Removed when a worker takes it: a booking arriving meanwhile queues it again.
+    Requested daily for every service to come, and when an analyst changes a
+    price. Removed when a worker takes it: a request arriving meanwhile queues
+    the service again.
     """
 
-    __tablename__ = "pending_forecasts"
+    __tablename__ = "compute_requests"
 
     service_id: Mapped[int] = mapped_column(
         ForeignKey("services.id", ondelete="CASCADE"), primary_key=True

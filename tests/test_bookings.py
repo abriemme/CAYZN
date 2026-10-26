@@ -175,6 +175,24 @@ def test_key_reused_for_another_sale_is_rejected(client, session, plan):
     assert [b.price for b in bookings(session)] == [Decimal(10)]
 
 
+def test_key_reused_for_another_departure_date_is_a_distinct_booking(
+    client, session, plan
+):
+    # Keys are unique per departure date, so the same one stores two bookings:
+    # a redelivery must find only the one of its own date.
+    other = PAYLOAD | {
+        "service_number": "7866",
+        "departure_date": "2024-11-15",
+        "origin_station_name": "ply",
+    }
+    post(client, PAYLOAD, key="abc")
+    post(client, other, key="abc")
+
+    assert post(client, PAYLOAD, key="abc").status_code == 200
+    assert post(client, other, key="abc").status_code == 200
+    assert len(bookings(session)) == 2
+
+
 @pytest.mark.parametrize("key", [None, "abc"])
 def test_cancellation_updates_existing_booking(client, session, plan, key):
     first = post(client, PAYLOAD, key=key)

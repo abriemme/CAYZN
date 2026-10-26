@@ -7,14 +7,37 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 from redis import Redis
 from redis_fastapi import AsyncRedisDep, FastAPIRedis
 from redis_fastapi import get_settings as get_redis_settings
-from sqlalchemy import text
+from sqlalchemy import and_, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased, selectinload
 
-from cayzn import od_cache
+from cayzn import od_cache, revenue_management
 from cayzn.bookings import BookingConflict, record_booking
 from cayzn.db import SessionLocal, get_db
-from cayzn.schemas import BookingIn, BookingOut
+from cayzn.freshness import runs
+from cayzn.models import (
+    Booking,
+    ForecastPoint,
+    OriginDestination,
+    PriceChange,
+    RecommendedPrice,
+    Service,
+    Stop,
+)
+from cayzn.prices import change_price
+from cayzn.schemas import (
+    BookingIn,
+    BookingOut,
+    CurvePoint,
+    GridOut,
+    LoadingCurveOut,
+    ODOut,
+    PriceChangeOut,
+    PriceIn,
+    PriceOut,
+)
 from cayzn.settings import settings
+from cayzn.worker import request_compute
 
 
 def _load_od_cache() -> None:
@@ -87,3 +110,161 @@ async def create_booking(
     if not created:
         response.status_code = status.HTTP_200_OK
     return BookingOut(id=booking_id, service_id=service_id, od_id=od_id)
+
+
+async def _service(db: AsyncSession, service_id: int) -> Service:
+    service = await db.get(Service, service_id)
+    if service is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown service")
+    return service
+
+
+async def _od(db: AsyncSession, od_id: int, lock: bool = False) -> OriginDestination:
+    query = (
+        select(OriginDestination)
+        .where(OriginDestination.id == od_id)
+        .options(
+            selectinload(OriginDestination.origin),
+            selectinload(OriginDestination.destination),
+        )
+    )
+    od = await db.scalar(query.with_for_update() if lock else query)
+    if od is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown OD")
+    return od
+
+
+def _od_out(od: OriginDestination, recommended: RecommendedPrice | None) -> ODOut:
+    return ODOut(
+        id=od.id,
+        origin=od.origin.code,
+        destination=od.destination.code,
+        price=od.price,
+        recommended_price=recommended.price if recommended else None,
+    )
+
+
+@app.get("/services/{service_id}/ods")
+async def service_ods(service_id: int, db: DB) -> GridOut:
+    """The service's ODs with their current and last recommended prices."""
+    await _service(db, service_id)
+    r = await runs(db, service_id)
+    optimization_id = r.optimization.id if r.optimization else None
+    origin, destination = aliased(Stop), aliased(Stop)
+    rows = await db.execute(
+        select(
+            OriginDestination.id,
+            origin.code,
+            destination.code,
+            OriginDestination.price,
+            RecommendedPrice.price,
+        )
+        .join(origin, OriginDestination.origin)
+        .join(destination, OriginDestination.destination)
+        .outerjoin(
+            RecommendedPrice,
+            and_(
+                RecommendedPrice.od_id == OriginDestination.id,
+                RecommendedPrice.forecast_id == optimization_id,
+            ),
+        )
+        .where(OriginDestination.service_id == service_id)
+        .order_by(OriginDestination.id)
+    )
+    return GridOut(
+        service_id=service_id,
+        forecast_id=optimization_id,
+        ods=[
+            ODOut(id=i, origin=o, destination=d, price=p, recommended_price=rp)
+            for i, o, d, p, rp in rows
+        ],
+        freshness=r.freshness,
+    )
+
+
+@app.put(
+    "/ods/{od_id}/price",
+    responses={409: {"description": "Not the recommended price of that run"}},
+)
+async def set_od_price(od_id: int, payload: PriceIn, db: DB) -> PriceOut:
+    """Change the OD's price, or apply a run's recommendation (`forecast_id`).
+
+    A change requests a new forecast and optimization of the service.
+    """
+    od = await _od(db, od_id, lock=True)
+    if payload.forecast_id is not None:
+        recommended = await db.get(RecommendedPrice, (payload.forecast_id, od_id))
+        if recommended is None or recommended.price != payload.price:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"{payload.price} is not the price recommended by run "
+                f"{payload.forecast_id} for OD {od_id}",
+            )
+    if change := change_price(od, payload.price, "analyst", payload.forecast_id):
+        db.add(change)
+        await request_compute(db, od.service_id)
+    r = await runs(db, od.service_id)
+    recommended = (
+        await db.get(RecommendedPrice, (r.optimization.id, od_id))
+        if r.optimization
+        else None
+    )
+    out = PriceOut(od=_od_out(od, recommended), freshness=r.freshness)
+    await db.commit()
+    return out
+
+
+@app.get("/ods/{od_id}/price-history")
+async def od_price_history(od_id: int, db: DB) -> list[PriceChangeOut]:
+    """The OD's price changes, latest first."""
+    await _od(db, od_id)
+    changes = await db.scalars(
+        select(PriceChange)
+        .where(PriceChange.od_id == od_id)
+        .order_by(PriceChange.changed_at.desc(), PriceChange.id.desc())
+    )
+    return [PriceChangeOut.model_validate(c) for c in changes]
+
+
+@app.get("/services/{service_id}/loading-curve")
+async def loading_curve(
+    service_id: int, db: DB, od_id: int | None = None
+) -> LoadingCurveOut:
+    """Cumulative bookings by day-x, of the service or of one of its ODs
+    (`od_id`), completed by the last forecast where not yet observed."""
+    service = await _service(db, service_id)
+    if od_id is not None and (await _od(db, od_id)).service_id != service_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown OD")
+    bookings = (
+        await db.execute(
+            select(Booking.od_id, Booking.sale_datetime, Booking.cancel_datetime).where(
+                Booking.service_id == service_id
+            )
+        )
+    ).all()
+    observed = revenue_management.observed_curve(
+        service.departure_date, bookings, od_id
+    )
+    r = await runs(db, service_id)
+    forecast: list[CurvePoint] = []
+    if r.forecast is not None:
+        points = (
+            select(ForecastPoint.day_x, func.sum(ForecastPoint.bookings))
+            .where(ForecastPoint.forecast_id == r.forecast.id)
+            .group_by(ForecastPoint.day_x)
+            .order_by(ForecastPoint.day_x.desc())
+        )
+        if od_id is not None:
+            points = points.where(ForecastPoint.od_id == od_id)
+        if observed:  # observed since the run, the forecast is replaced
+            points = points.where(ForecastPoint.day_x < min(observed))
+        forecast = [
+            CurvePoint(day_x=d, bookings=n) for d, n in await db.execute(points)
+        ]
+    return LoadingCurveOut(
+        service_id=service_id,
+        od_id=od_id,
+        observed=[CurvePoint(day_x=d, bookings=n) for d, n in observed.items()],
+        forecast=forecast,
+        freshness=r.freshness,
+    )

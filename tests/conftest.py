@@ -1,5 +1,7 @@
+import asyncio
 from pathlib import Path
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from redis import Redis
@@ -10,7 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
-from cayzn import od_cache
+from cayzn import od_cache, worker
 from cayzn.db import Base, get_db
 from cayzn.importer import import_transport_plan
 from cayzn.main import app
@@ -96,3 +98,30 @@ def plan(session, redis):
     import_transport_plan(session, FILES)
     session.commit()
     od_cache.reload(session, redis)
+
+
+@pytest.fixture
+def conninfo(database_url):
+    return database_url.set(drivername="postgresql").render_as_string(
+        hide_password=False
+    )
+
+
+@pytest.fixture
+def run_worker(database_url, conninfo, monkeypatch):
+    """Run the jobs requested so far, on the test database, without delays."""
+    monkeypatch.setattr(worker, "FORECAST_SECONDS", 0)
+    monkeypatch.setattr(worker, "OPTIMIZATION_SECONDS", 0)
+    engine = create_async_engine(database_url, poolclass=NullPool)
+    monkeypatch.setattr(worker, "AsyncSessionLocal", async_sessionmaker(engine))
+
+    async def run():
+        async with await psycopg.AsyncConnection.connect(
+            conninfo, autocommit=True
+        ) as conn:
+            jobs = 0
+            while await worker.run_next(conn):
+                jobs += 1
+            return jobs
+
+    return lambda: asyncio.run(run())

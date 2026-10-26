@@ -11,9 +11,13 @@ install:
 run:
     uv run uvicorn cayzn.main:app --port 8000 --reload
 
-# Run the forecast and optimization jobs queued by POST /bookings
+# Run the forecast and optimization jobs requested
 worker:
     uv run python -m cayzn.worker
+
+# Request a forecast and optimization of every service still to depart
+request-all:
+    uv run python -m cayzn.worker request-all
 
 lint:
     uv run ruff check .
@@ -36,8 +40,8 @@ migrate:
 migrate-check:
     uv run alembic check
 
-# Import the transport plan (trains, stops, ods, prices .csv) and reload the cache
-import-plan dir="files":
+# Import the transport plan (trains, stops, ods, prices .csv), reload the cache, request the daily runs
+import-plan dir="files": && request-all
     uv run python -m cayzn.importer {{dir}}
 
 # Setup pre-commit hooks
