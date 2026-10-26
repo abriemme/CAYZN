@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from cayzn.models import Booking
 from cayzn.schemas import BookingIn
-from cayzn.worker import enqueue_forecast_and_optimize
 
 
 class BookingConflict(Exception):
@@ -22,14 +21,14 @@ async def record_booking(
 ) -> tuple[int, bool]:
     """Store the booking, or apply its cancellation if already received.
 
-    Returns the booking id and whether it was created. Any change queues the
-    service's forecast and optimization, in the same transaction.
+    Returns the booking id and whether it was created.
     """
     sale = (od_id, payload.sale_datetime, payload.price, payload.currency)
 
     # The database arbitrates duplicates, including concurrent deliveries:
     # the insert is skipped when the booking already exists.
     insert_stmt = insert(Booking).values(
+        departure_date=payload.departure_date,  # partition key
         idempotency_key=idempotency_key,
         service_id=service_id,
         od_id=od_id,
@@ -40,7 +39,13 @@ async def record_booking(
     )
     if idempotency_key is None:
         insert_stmt = insert_stmt.on_conflict_do_nothing(
-            index_elements=["od_id", "sale_datetime", "price", "currency"],
+            index_elements=[
+                "od_id",
+                "sale_datetime",
+                "price",
+                "currency",
+                "departure_date",
+            ],
             index_where=Booking.idempotency_key.is_(None),
         )
         match = and_(
@@ -52,13 +57,12 @@ async def record_booking(
         )
     else:
         insert_stmt = insert_stmt.on_conflict_do_nothing(
-            index_elements=["idempotency_key"]
+            index_elements=["idempotency_key", "departure_date"]
         )
         match = Booking.idempotency_key == idempotency_key
 
     booking_id = await db.scalar(insert_stmt.returning(Booking.id))
     if booking_id is not None:
-        await enqueue_forecast_and_optimize(db, service_id)
         await db.commit()
         return booking_id, True
 
@@ -74,7 +78,6 @@ async def record_booking(
     if payload.cancel_datetime is not None:
         if booking.cancel_datetime is None:
             booking.cancel_datetime = payload.cancel_datetime
-            await enqueue_forecast_and_optimize(db, service_id)
         elif booking.cancel_datetime != payload.cancel_datetime:
             raise BookingConflict("Booking already cancelled at a different time")
     # Read before commit(): the commit expires the object's attributes.
