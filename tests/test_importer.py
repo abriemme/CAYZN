@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import func, select, text
 
 from cayzn.importer import TransportPlanError, import_transport_plan
-from cayzn.models import OriginDestination, Service, ServiceStop, Stop
+from cayzn.models import OriginDestination, PriceChange, Service, ServiceStop, Stop
 
 FILES = Path(__file__).parents[1] / "files"
 
@@ -100,6 +100,19 @@ def test_reimport_updates_itinerary_and_price(session, plan):
         .where(Service.name == "7866")
     ).all()
     assert prices == [Decimal("55.50")]
+    history = session.execute(
+        select(PriceChange.previous_price, PriceChange.price, PriceChange.source)
+        .join(PriceChange.od)
+        .join(OriginDestination.service)
+        .where(Service.name == "7866")
+        .order_by(PriceChange.id)
+    ).all()
+    assert history == [
+        (None, Decimal(50), "import"),
+        (Decimal(50), Decimal("55.50"), "import"),
+    ]
+    # Unchanged prices leave no trace.
+    assert count(session, PriceChange) == 6
 
 
 def test_station_codes_are_stored_uppercase(session, plan):

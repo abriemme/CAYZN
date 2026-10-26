@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session, selectinload
 from cayzn import od_cache
 from cayzn.db import SessionLocal
 from cayzn.models import OriginDestination, Service, ServiceStop, Stop
+from cayzn.prices import change_price
 from cayzn.settings import settings
 
 ServiceKey = tuple[str, date]
@@ -195,7 +196,8 @@ def import_transport_plan(session: Session, directory: Path) -> None:
             or price != price.quantize(Decimal("0.01"))
         ):
             raise TransportPlanError(f"{where}: invalid price {row['price']!r}")
-        od.price = price
+        if change := change_price(od, price, "import"):
+            session.add(change)
 
 
 if __name__ == "__main__":

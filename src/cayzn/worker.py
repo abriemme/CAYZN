@@ -1,17 +1,22 @@
-"""Forecast and optimization jobs, queued by POST /bookings, run by `just worker`.
+"""Forecast and optimization jobs, run by `just worker`.
 
-The queue is the `pending_forecasts` table: at most one row per service, taken
-with SKIP LOCKED. A per-service advisory lock keeps a service's jobs from
-running concurrently; workers skip the services it holds. Failed jobs are not retried: the service's next booking
-queues a new one.
+Usage: python -m cayzn.worker              run the requested jobs
+       python -m cayzn.worker request-all  request every service still to depart
+
+The queue is the `compute_requests` table: at most one row per service, taken
+with SKIP LOCKED. Services are requested daily (`request-all`, after the
+nightly import) and when an analyst changes a price. A per-service advisory
+lock keeps a service's jobs from running concurrently; workers skip the
+services it holds. Failed jobs are not retried: the next request runs a new one.
 """
 
 import asyncio
 import logging
 import signal
+import sys
 
 import psycopg
-from sqlalchemy import func, make_url, select, text
+from sqlalchemy import func, make_url, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,9 +24,10 @@ from cayzn import revenue_management
 from cayzn.db import AsyncSessionLocal
 from cayzn.models import (
     Booking,
+    ComputeRequest,
     Forecast,
+    ForecastPoint,
     OriginDestination,
-    PendingForecast,
     RecommendedPrice,
     Service,
 )
@@ -29,7 +35,7 @@ from cayzn.settings import settings
 
 log = logging.getLogger(__name__)
 
-CHANNEL = "pending_forecasts"
+CHANNEL = "compute_requests"
 # First key of the two-int advisory locks: keeps service ids apart from other uses.
 LOCK_SPACE = 1
 # Woken by NOTIFY; polls too, in case a notification came while disconnected.
@@ -42,8 +48,8 @@ OPTIMIZATION_SECONDS = 5.0
 # Oldest waiting service, skipping those running on another worker: they stay
 # queued, and that worker takes them next.
 CLAIM = text("""
-    DELETE FROM pending_forecasts WHERE service_id = (
-        SELECT service_id FROM pending_forecasts p
+    DELETE FROM compute_requests WHERE service_id = (
+        SELECT service_id FROM compute_requests p
         WHERE NOT EXISTS (
             SELECT FROM pg_locks
             WHERE locktype = 'advisory'
@@ -61,16 +67,34 @@ CLAIM = text("""
 """)
 
 
-async def enqueue_forecast_and_optimize(db: AsyncSession, service_id: int) -> None:
+async def request_compute(db: AsyncSession, service_id: int) -> None:
     """Queue the service in `db`'s transaction: queued iff `db` commits.
 
     A service already waiting stays queued once: its job will read this change.
     """
     await db.execute(
-        insert(PendingForecast).values(service_id=service_id).on_conflict_do_nothing()
+        insert(ComputeRequest).values(service_id=service_id).on_conflict_do_nothing()
     )
     # Delivered to the workers on commit only.
     await db.execute(select(func.pg_notify(CHANNEL, "")))
+
+
+async def request_all() -> int:
+    """Queue every service still to depart; return how many were added."""
+    async with AsyncSessionLocal() as db:
+        added = await db.execute(
+            insert(ComputeRequest)
+            .from_select(
+                ["service_id"],
+                select(Service.id).where(Service.departure_date >= func.current_date()),
+            )
+            .on_conflict_do_nothing()
+            .returning(ComputeRequest.service_id)
+        )
+        count = len(added.all())
+        await db.execute(select(func.pg_notify(CHANNEL, "")))
+        await db.commit()
+    return count
 
 
 async def run_next(conn: psycopg.AsyncConnection) -> bool:
@@ -146,11 +170,19 @@ async def forecast_and_optimize(service_id: int) -> None:
             return
         current_day_x, curves = result
         forecast = Forecast(
-            service_id=service_id, current_day_x=current_day_x, curves=curves
+            service_id=service_id,
+            current_day_x=current_day_x,
+            # Same count as `freshness.bookings_count`.
+            bookings_as_of=sum(1 + (cancel is not None) for _, _, cancel in bookings),
         )
         db.add(forecast)
         await db.flush()
         forecast_id = forecast.id  # Read before commit() expires it.
+        db.add_all(
+            ForecastPoint(forecast_id=forecast_id, od_id=od_id, day_x=d, bookings=n)
+            for od_id in prices
+            for d, n in curves[str(od_id)].items()
+        )
         await db.commit()
 
         recommended = revenue_management.optimize(current_day_x, curves, prices)
@@ -159,9 +191,19 @@ async def forecast_and_optimize(service_id: int) -> None:
             RecommendedPrice(forecast_id=forecast_id, od_id=od_id, price=price)
             for od_id, price in recommended.items()
         )
+        await db.execute(
+            update(Forecast)
+            .where(Forecast.id == forecast_id)
+            .values(optimized_at=func.now())
+        )
         await db.commit()
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(work())
+    if sys.argv[1:] == ["request-all"]:
+        print(f"{asyncio.run(request_all())} services requested")
+    elif sys.argv[1:]:
+        sys.exit("usage: python -m cayzn.worker [request-all]")
+    else:
+        asyncio.run(work())

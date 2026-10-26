@@ -22,6 +22,53 @@ def day_x(departure_date: date, moment: datetime) -> int:
     return (departure_date - moment.date()).days
 
 
+# (od_id, sale day-x, cancellation day-x) of a service's bookings.
+type Sold = list[tuple[int, int, int | None]]
+
+
+def _sold(
+    departure_date: date, bookings: Iterable[tuple[int, datetime, datetime | None]]
+) -> Sold:
+    return [
+        (
+            od_id,
+            day_x(departure_date, sale),
+            None if cancel is None else day_x(departure_date, cancel),
+        )
+        for od_id, sale, cancel in bookings
+    ]
+
+
+def _current_day_x(sold: Sold) -> int:
+    """Latest sale or cancellation: both are observed."""
+    return min(
+        min(sale, sale if cancel is None else cancel) for _, sale, cancel in sold
+    )
+
+
+def _booked(sold: Sold, d: int, od_id: int | None = None) -> int:
+    """Bookings net of cancellations at day-x `d`, of one OD or the service."""
+    return sum(
+        (sale >= d) - (cancel is not None and cancel >= d)
+        for o, sale, cancel in sold
+        if od_id is None or o == od_id
+    )
+
+
+def observed_curve(
+    departure_date: date,
+    bookings: Iterable[tuple[int, datetime, datetime | None]],
+    od_id: int | None = None,
+) -> dict[int, int]:
+    """Booking curve of the service, or of one of its ODs, from the service's
+    first sale down to its current day-x."""
+    sold = _sold(departure_date, bookings)
+    if not sold:
+        return {}
+    first, current = max(sale for _, sale, _ in sold), _current_day_x(sold)
+    return {d: _booked(sold, d, od_id) for d in range(first, current - 1, -1)}
+
+
 def forecast(
     departure_date: date,
     od_ids: Iterable[int],
@@ -30,35 +77,18 @@ def forecast(
     """Current day-x and expected curves from it down to day-0, from the
     service's (od_id, sale, cancellation) bookings; None if nothing is left
     to forecast."""
-    sold = [
-        (
-            od_id,
-            day_x(departure_date, sale),
-            None if cancel is None else day_x(departure_date, cancel),
-        )
-        for od_id, sale, cancel in bookings
-    ]
+    sold = _sold(departure_date, bookings)
     if not sold:
         return None
-    # Latest sale or cancellation: both are observed.
-    current = min(
-        min(sale, sale if cancel is None else cancel) for _, sale, cancel in sold
-    )
+    current = _current_day_x(sold)
     if current < 0:  # sold after departure
         return None
     window = min(PACE_WINDOW, max(sale for _, sale, _ in sold) - current + 1)
 
-    def booking_curve(od_id: int, d: int) -> int:
-        return sum(
-            (sale >= d) - (cancel is not None and cancel >= d)
-            for o, sale, cancel in sold
-            if o == od_id
-        )
-
     curves: Curves = {}
     for od_id in od_ids:
-        now = booking_curve(od_id, current)
-        pace = (now - booking_curve(od_id, current + window)) / window
+        now = _booked(sold, current, od_id)
+        pace = (now - _booked(sold, current + window, od_id)) / window
         curves[str(od_id)] = {
             d: max(0.0, now + pace * (current - d)) for d in range(current, -1, -1)
         }
