@@ -44,11 +44,15 @@ The number of days before a Service's departure; day-0 is the departure day. Rev
 _Avoid_: J-x, days-to-departure, DTD
 
 **Current day-x**:
-The day-x of a Service's most recent Booking sale. Day-x values from it down to day-0 are not yet observed.
+The day-x of a Service's most recent Booking sale or Cancellation. Day-x values from it down to day-0 are not yet observed.
 _Avoid_: Today
 
+**Booking curve**:
+The cumulative Bookings, net of Cancellations, at each day-x, for a Service or one of its ODs.
+_Avoid_: Load curve, booking profile
+
 **Forecast**:
-The expected cumulative Bookings at every day-x not yet observed, for a Service and for each of its ODs.
+The expected Booking curve at every day-x not yet observed, for a Service and for each of its ODs.
 _Avoid_: Prediction, projection
 
 **Optimization**:
