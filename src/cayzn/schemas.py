@@ -117,3 +117,26 @@ class LoadingCurveOut(BaseModel):
     observed: list[CurvePoint]
     forecast: list[CurvePoint]
     freshness: Freshness
+
+
+class ServiceOut(BaseModel):
+    """One row of the analysts' service listing."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    departure_date: date
+    # Sum of the prices of bookings not cancelled.
+    # ponytail: currencies are summed as one; split by currency if an operator
+    # ever sells in several.
+    revenue: Decimal
+    booking_count: int
+    # Lowest OD current price; None when no OD of the service has a price.
+    min_price: Decimal | None
+
+
+class ServicesPage(BaseModel):
+    items: list[ServiceOut]
+    # Opaque cursor for the next page, None on the last one.
+    next_cursor: str | None
