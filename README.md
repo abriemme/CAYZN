@@ -45,3 +45,37 @@ computed, `stale` if bookings arrived since, `pending` if a job is waiting; all 
   counted at the day they were cancelled), then the last forecast for the day-x values not yet observed.
 
 Local Postgres and Redis: `docker compose up -d`.
+
+# Roadmap: ideas not implemented
+
+Decisions made to keep the scope in check; each line says what would trigger it.
+
+## Data
+- Partitioning `bookings` by departure month: reads are indexed by service and
+  do not depend on volume; introduce it for purging and maintenance beyond a
+  few hundred million rows (cost: composite PK, loss of incoming FKs).
+- Loading curve aggregates maintained incrementally (aggregate table or
+  TimescaleDB continuous aggregates) if the windowed query exceeds ~50 ms on
+  large services.
+- Purge old runs: keep N runs per service, archive the rest.
+
+## Computation
+- Recompute triggered by a price change (today: recommendation marked
+  `stale`, no automatic rerun).
+- Prioritize the queue by proximity to departure (a train leaving tomorrow
+  before a train in 4 months).
+- Serialize per service with an advisory lock instead of concurrency 1 once
+  there is more than one worker.
+
+## API
+- Batch ingest (`POST /bookings/batch`) for catch-ups from the sending system.
+- Redis cache of frontend responses (loading curve, grid) invalidated at the
+  end of each run.
+- Authentication between systems (HMAC signature on the webhook, token on the
+  frontend API).
+
+## Operations
+- Prometheus metrics (ingest throughput, p99 latency, run duration, queue
+  depth) via the Remoulade middleware and a `/metrics` endpoint on the API.
+- Partman or a nightly job for partitions if the first item is done.
+- Answers to the CI / monitoring / scaling / SLA questions: see `docs/interview.md`.
