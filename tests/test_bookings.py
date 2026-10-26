@@ -29,13 +29,6 @@ PAYLOAD = {
 DEPARTURE = date(2024, 11, 14)
 
 
-@pytest.fixture
-def plan(session, redis):
-    import_transport_plan(session, FILES)
-    session.commit()
-    od_cache.reload(session, redis)
-
-
 def test_booking_is_stored_and_linked(client, session, plan):
     response = client.post(
         "/bookings", json=PAYLOAD | {"cancel_datetime": "2024-04-29T10:00:00"}

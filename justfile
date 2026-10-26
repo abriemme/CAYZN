@@ -11,6 +11,10 @@ install:
 run:
     uv run uvicorn cayzn.main:app --port 8000 --reload
 
+# Run the forecast and optimization jobs queued by POST /bookings
+worker:
+    uv run python -m cayzn.worker
+
 lint:
     uv run ruff check .
 

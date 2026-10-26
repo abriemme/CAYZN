@@ -4,6 +4,7 @@
 ```bash
 just install
 just run  # http://127.0.0.1:8000/docs
+just worker                            # runs the jobs queued by POST /bookings
 just check                             # lint, format, types (ty)
 just test                              # requires Postgres and Redis (throwaway cayzn_test_* databases)
 just migrate                           # alembic upgrade head
@@ -24,11 +25,11 @@ Each API process keeps found ODs in an in-memory LRU in front of Redis.
 otherwise by (OD, sale time, price, currency). A redelivery returns the existing booking (200);
 one carrying `cancel_datetime` cancels it.
 
-`bookings` is partitioned by month of the service's departure date (`bookings_YYYY_MM`).
-The import creates the partitions for the months of the plan; a departed month is archived with
-`DROP TABLE bookings_YYYY_MM`. Postgres cannot enforce uniqueness across partitions: the
-`Idempotency-Key` and the natural key are unique per departure date.
+Each booking created, or cancellation applied, queues its service for a forecast and optimization job,
+in the same transaction (`pending_forecasts` table, NOTIFY on commit). A service waits at most once and runs
+on one worker at a time: bookings arriving meanwhile are read by the waiting job. The job stores a forecast
+(`forecasts`), then the recommended prices it leads to (`recommended_prices`); both algorithms are simple
+placeholder heuristics (`src/cayzn/revenue_management.py`). Failed jobs are only logged, never retried:
+the service's next booking queues it again. Run several `just worker` to process services in parallel.
 
-Whole stack in Docker (`db`, `redis`, `worker`, `api`): `docker compose up --build`, then http://127.0.0.1:8000/docs.
-`worker` is a one-shot job: it applies the migrations and imports `files/` into the database and the Redis cache; `api` starts once it has succeeded.
-Only `db` and `redis` for a local `just run`: `docker compose up -d db redis`.
+Local Postgres and Redis: `docker compose up -d`.

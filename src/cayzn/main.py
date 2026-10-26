@@ -16,6 +16,7 @@ from cayzn.db import SessionLocal, get_db
 from cayzn.models import Booking
 from cayzn.schemas import BookingIn, BookingOut
 from cayzn.settings import settings
+from cayzn.worker import enqueue_forecast_and_optimize
 
 
 def _load_od_cache() -> None:
@@ -121,6 +122,7 @@ async def create_booking(
 
     booking_id = await db.scalar(insert_stmt.returning(Booking.id))
     if booking_id is not None:
+        await enqueue_forecast_and_optimize(db, service_id)
         await db.commit()
         return BookingOut(id=booking_id, service_id=service_id, od_id=od_id)
 
@@ -139,6 +141,7 @@ async def create_booking(
     if payload.cancel_datetime is not None:
         if booking.cancel_datetime is None:
             booking.cancel_datetime = payload.cancel_datetime
+            await enqueue_forecast_and_optimize(db, service_id)
         elif booking.cancel_datetime != payload.cancel_datetime:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,

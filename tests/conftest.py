@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 from redis import Redis
@@ -10,8 +12,11 @@ from sqlalchemy.pool import NullPool
 
 from cayzn import od_cache
 from cayzn.db import Base, get_db
+from cayzn.importer import import_transport_plan
 from cayzn.main import app
 from cayzn.settings import settings
+
+FILES = Path(__file__).parents[1] / "files"
 
 
 @pytest.fixture(scope="session")
@@ -84,3 +89,10 @@ def client(session, redis, database_url):
     app.dependency_overrides[get_async_redis] = get_test_redis
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def plan(session, redis):
+    import_transport_plan(session, FILES)
+    session.commit()
+    od_cache.reload(session, redis)

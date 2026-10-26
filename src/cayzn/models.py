@@ -1,4 +1,5 @@
-"""Transport plan (services, stops, ODs, current prices) and bookings.
+"""Transport plan (services, stops, ODs, current prices), bookings, and the
+forecasts and recommended prices computed from them, and their queue.
 
 These ORM models are deliberately separate from the API's Pydantic schemas.
 
@@ -11,16 +12,20 @@ constraint. The nightly import creates the partitions (`importer.ensure_partitio
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import (
     CheckConstraint,
+    DateTime,
     ForeignKey,
     Index,
     Numeric,
     String,
     UniqueConstraint,
+    func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from cayzn.db import Base
@@ -146,3 +151,54 @@ class Booking(Base):
 
     service: Mapped[Service] = relationship()
     od: Mapped[OriginDestination] = relationship()
+
+
+class Forecast(Base):
+    """Forecast of a service, kept for every run (append-only).
+
+    `curves` maps "service" and each OD id to {day-x: expected bookings},
+    from `current_day_x` down to day-0.
+    """
+
+    __tablename__ = "forecasts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    service_id: Mapped[int] = mapped_column(
+        ForeignKey("services.id", ondelete="CASCADE"), index=True
+    )
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    current_day_x: Mapped[int]
+    curves: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+
+class RecommendedPrice(Base):
+    """Price recommended for an OD by the optimization of a forecast."""
+
+    __tablename__ = "recommended_prices"
+    __table_args__ = (CheckConstraint("price >= 0", name="price_positive"),)
+
+    forecast_id: Mapped[int] = mapped_column(
+        ForeignKey("forecasts.id", ondelete="CASCADE"), primary_key=True
+    )
+    od_id: Mapped[int] = mapped_column(
+        ForeignKey("ods.id", ondelete="CASCADE"), primary_key=True
+    )
+    price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+
+
+class PendingForecast(Base):
+    """Service waiting for its forecast and optimization job (the worker's queue).
+
+    Removed when a worker takes it: a booking arriving meanwhile queues it again.
+    """
+
+    __tablename__ = "pending_forecasts"
+
+    service_id: Mapped[int] = mapped_column(
+        ForeignKey("services.id", ondelete="CASCADE"), primary_key=True
+    )
+    queued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
