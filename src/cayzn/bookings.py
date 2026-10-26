@@ -67,7 +67,13 @@ async def record_booking(
         return booking_id, True
 
     # Already received: lock it so concurrent cancellations apply one at a time.
-    booking = (await db.scalars(select(Booking).where(match).with_for_update())).one()
+    booking = (
+        await db.scalars(
+            select(Booking)
+            .where(Booking.departure_date == payload.departure_date, match)
+            .with_for_update()
+        )
+    ).one()
     if (
         booking.od_id,
         booking.sale_datetime,
