@@ -6,6 +6,7 @@ of ODs expected to grow faster than their service, and lowers the others.
 """
 
 import math
+from collections import Counter
 from collections.abc import Iterable
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
@@ -66,7 +67,18 @@ def observed_curve(
     if not sold:
         return {}
     first, current = max(sale for _, sale, _ in sold), _current_day_x(sold)
-    return {d: _booked(sold, d, od_id) for d in range(first, current - 1, -1)}
+    # One pass: walking day-x down, a sale adds one and a cancellation removes one.
+    delta: Counter[int] = Counter()
+    for o, sale, cancel in sold:
+        if od_id is None or o == od_id:
+            delta[sale] += 1
+            if cancel is not None:
+                delta[cancel] -= 1
+    booked, curve = 0, {}
+    for d in range(first, current - 1, -1):
+        booked += delta[d]
+        curve[d] = booked
+    return curve
 
 
 def forecast(
